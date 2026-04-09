@@ -59,6 +59,11 @@ Usage:
     taskana-cli tag <id> <name>                  Add tag (creates if not found)
     taskana-cli untag <id> <name>                Remove tag
 
+  Attachments:
+    taskana-cli attachments <id>                 List attachments on task
+    taskana-cli download <attachment_id> [--output path]  Download attachment
+    taskana-cli upload <id> <file_path>          Upload file as attachment
+
   Dependencies:
     taskana-cli deps <id>                        List dependencies (blocked by)
     taskana-cli dep <id> <dep_id>                Add dependency
@@ -96,13 +101,14 @@ Global flags:
 """
 
 import json
+import mimetypes
 import os
 import sys
 import urllib.request
 import urllib.error
 from pathlib import Path
 
-VERSION = "1.0.1"
+VERSION = "1.1.0"
 DEFAULT_BASE_URL = "https://taskana.tgai.app/api/1.0"
 
 
@@ -1145,6 +1151,85 @@ def cmd_comments(token, task_id):
     print(f"Total: {len(comments)} comments")
 
 
+def cmd_attachments(token, task_id):
+    """List attachments on a task."""
+    attachments = api("GET", f"/tasks/{task_id}/attachments?opt_fields=name,created_at,size", token)
+    if not attachments:
+        print("No attachments")
+        return
+    for a in attachments:
+        created = (a.get("created_at") or "")[:10]
+        size = a.get("size")
+        size_str = f"  {size} bytes" if size else ""
+        print(f"{a['gid']}  {a.get('name', '?')}{size_str}  ({created})")
+    print(f"\nTotal: {len(attachments)} attachments")
+
+
+def cmd_attachment_download(token, attachment_id, output_path=None):
+    """Download an attachment by ID."""
+    a = api("GET", f"/attachments/{attachment_id}?opt_fields=name,download_url,size", token)
+    url = a.get("download_url")
+    if not url:
+        print(f"No download URL for attachment {attachment_id}", file=sys.stderr)
+        sys.exit(1)
+
+    name = a.get("name", f"attachment_{attachment_id}")
+    dest = Path(output_path) if output_path else Path.cwd() / name
+
+    req = urllib.request.Request(url)
+    try:
+        with urllib.request.urlopen(req) as resp:
+            dest.write_bytes(resp.read())
+    except (urllib.error.HTTPError, urllib.error.URLError, OSError) as e:
+        print(f"Download failed: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    size = dest.stat().st_size
+    print(f"Downloaded: {dest} ({size} bytes)")
+
+
+def cmd_attachment_upload(token, task_id, file_path):
+    """Upload a file as attachment to a task."""
+    path = Path(file_path)
+    if not path.exists():
+        print(f"File not found: {file_path}", file=sys.stderr)
+        sys.exit(1)
+
+    boundary = f"----PythonBoundary{os.urandom(16).hex()}"
+    content_type, _ = mimetypes.guess_type(str(path))
+    if not content_type:
+        content_type = "application/octet-stream"
+
+    body = b""
+    body += f"--{boundary}\r\n".encode()
+    body += f'Content-Disposition: form-data; name="file"; filename="{path.name}"\r\n'.encode()
+    body += f"Content-Type: {content_type}\r\n\r\n".encode()
+    body += path.read_bytes()
+    body += f"\r\n--{boundary}--\r\n".encode()
+
+    url = f"{ACTIVE_BASE_URL}/tasks/{task_id}/attachments"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": f"multipart/form-data; boundary={boundary}",
+    }
+    req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+
+    try:
+        with urllib.request.urlopen(req) as resp:
+            result = json.loads(resp.read().decode())
+            a = result.get("data", {})
+            print(f"Uploaded: {a.get('name', path.name)} (ID: {a.get('gid', '?')})")
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode()
+        try:
+            errors = json.loads(error_body).get("errors", [])
+            msg = errors[0]["message"] if errors else error_body
+        except (json.JSONDecodeError, IndexError, KeyError):
+            msg = error_body
+        print(f"API Error ({e.code}): {msg}", file=sys.stderr)
+        sys.exit(1)
+
+
 def cmd_members(token, config):
     project_id = config["projectId"]
     members = api("GET",
@@ -1631,7 +1716,7 @@ def main():
                        "tags", "tag", "untag", "deps", "dep", "undep",
                        "blocks", "block", "unblock", "rename", "reopen",
                        "description", "history", "comments", "task-fields", "task-field-set",
-                       "estimate"}
+                       "estimate", "attachments", "download", "upload"}
         if args[0] in id_commands:
             print(f"ERROR: '--target all' cannot be used with '{args[0]}' — task IDs differ between backends.", file=sys.stderr)
             print("Use '--target <name>' to specify which backend.", file=sys.stderr)
@@ -1901,6 +1986,25 @@ def _run_command(cmd, args, token, config):
             print("Usage: taskana-cli estimate <task_id> <hours>", file=sys.stderr)
             sys.exit(1)
         cmd_estimate(token, config, args[1], args[2])
+    elif cmd == "attachments":
+        if len(args) < 2:
+            print("Usage: taskana-cli attachments <task_id>", file=sys.stderr)
+            sys.exit(1)
+        cmd_attachments(token, args[1])
+    elif cmd == "download":
+        if len(args) < 2:
+            print("Usage: taskana-cli download <attachment_id> [--output <path>]", file=sys.stderr)
+            sys.exit(1)
+        output = None
+        if "--output" in args:
+            idx = args.index("--output")
+            output = args[idx + 1] if idx + 1 < len(args) else None
+        cmd_attachment_download(token, args[1], output)
+    elif cmd == "upload":
+        if len(args) < 3:
+            print("Usage: taskana-cli upload <task_id> <file_path>", file=sys.stderr)
+            sys.exit(1)
+        cmd_attachment_upload(token, args[1], args[2])
     else:
         print(f"Unknown command: {cmd}", file=sys.stderr)
         print("Run 'taskana-cli help' for usage.", file=sys.stderr)

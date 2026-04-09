@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.0 (2026-04-09)
+- Add attachment support: `attachments`, `download`, `upload` commands
+- List attachments on tasks, download by ID, upload files via multipart
+
 ## 1.0.1 (2026-04-03)
 - Remove multi-target prompt injection from `cmd_overview` (irrelevant in Taskana-only fork)
 - Update CLAUDE.md with architecture docs and commands section

@@ -182,6 +182,11 @@ Tags:
   taskana-cli tag <id> <name>                  Add tag (creates if needed)
   taskana-cli untag <id> <name>                Remove tag
 
+Attachments:
+  taskana-cli attachments <id>                 List attachments on task
+  taskana-cli download <attachment_id> [--output path]  Download attachment
+  taskana-cli upload <id> <file_path>          Upload file as attachment
+
 Dependencies:
   taskana-cli deps <id>                        Blocked by (dependencies)
   taskana-cli dep <id> <dep_id>                Add dependency
