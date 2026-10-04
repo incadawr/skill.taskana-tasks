@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.0 (2026-10-04)
+- Add dashboards: `dashboard list|show|create|delete`, widgets: `widget add|move|remove|data`
+  (all widget types of the Taskana dashboards module; `--section` / `--parent` filters for stage progress and Review column).
+  Requires Taskana with dashboards under `/api/1.0` (API-token access)
+- `ask` warns (does not fail) when an option has no description or `--context` is missing
+- Skill: rule that every option has a description, `--context` = what it blocks + why the recommendation;
+  how to assemble a roadmap dashboard
+
 ## 1.2.0 (2026-10-04)
 - Add blocking questions: `ask`, `questions [--open|--answered|--all-statuses] [--since] [--all]`, `answer`, `withdraw`
   (requires Taskana with the questions API; answer = option and/or comment)
