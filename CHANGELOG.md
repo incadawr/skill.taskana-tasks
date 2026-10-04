@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.4.0 (2026-10-04)
+- Add structured review: `submit <id> --check ... --how ... [--branch] [--commits] [--minutes]` (moves to Review),
+  `reviews [--returned] [--all]`, `accept <id> [--comment]`, `return <id> --comment`
+- Add `inbox [--all-projects]` (open questions + reviews waiting for the owner, estimated minutes) and
+  `resume [--all]` (tasks the owner answered / returned that nobody picked up, answers inline)
+- `start` now also clears the task's resume flag (ignored on older servers)
+- Skill: session start = `resume` then `board`; agents `submit` instead of a free-form ПРИЕМКА comment; returned reviews flow
+- Requires Taskana with reviews / inbox / resume API (branch feature/3759-3764-3903-review-inbox)
+
 ## 1.3.0 (2026-10-04)
 - Add dashboards: `dashboard list|show|create|delete`, widgets: `widget add|move|remove|data`
   (all widget types of the Taskana dashboards module; `--section` / `--parent` filters for stage progress and Review column).
