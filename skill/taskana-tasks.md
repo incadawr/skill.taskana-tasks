@@ -142,7 +142,11 @@ taskana-cli ask <task_id> "Which queue do we use for workers?" \
     --agent "claude · <session label>"
 ```
 
-- Give 2-4 concrete options (`KEY: label`, optional ` | note`), always say which one you recommend and why (in `--context`).
+- Give 2-4 concrete options (`KEY: label | description`). **Every option MUST have a description** — what choosing it leads to
+  and what it costs (time, risk, lock-in). The owner decides from these lines without opening the code; the CLI warns
+  when a description is missing.
+- Always `--recommend` one option. **`--context` must say (1) what this question blocks** (which task/stage, what waits
+  behind it) **and (2) why you recommend that option.** Keep it short; no repo archaeology.
 - One decision = one question. Several open questions on a task are fine.
 - Then **move on to another task** — do not wait or poll in a loop.
 - Withdraw a question that became irrelevant: `taskana-cli withdraw <qid>`.
@@ -157,6 +161,35 @@ taskana-cli questions                          # still-open questions of this pr
 An answer is a chosen option and/or a free-text comment («B, but without X») — read both. The same answer is also posted to the
 task as a comment `ОТВЕТ: <key> — <label>. Комментарий: …`, and the task returns to its previous section automatically.
 Apply the decision, then continue the task (`taskana-cli start <id>`).
+
+### Dashboards: assemble a roadmap dashboard for a project
+
+Works with the normal API token (no web session needed). Widgets compute their data live; the owner sees the dashboard in the
+project's «Dashboard» view. Typical roadmap dashboard (stages = parent tasks R1..R6 with subtasks, columns = sections):
+
+```bash
+taskana-cli dashboard create "Roadmap"                      # bound to the current project; prints the dashboard id
+D=<id>
+# Stage progress: one widget per stage (parent task id) -> total / completed / incomplete of its subtasks
+taskana-cli widget add $D task_count --title "R1 — Foundation" --parent <R1_task_id> --x 0 --y 0 --w 4 --h 2
+taskana-cli widget add $D task_count --title "R2 — API"        --parent <R2_task_id> --x 4 --y 0 --w 4 --h 2
+# ...one per stage, 3 per row (grid is 12 columns wide)
+# Review column: how many tasks wait for acceptance
+taskana-cli widget add $D task_count --title "Awaiting review" --section "Review" --x 0 --y 2 --w 4 --h 2
+taskana-cli widget add $D task_count --title "Waiting for the owner" --section "Waiting Owner" --x 4 --y 2 --w 4 --h 2
+# Overall distribution and momentum
+taskana-cli widget add $D tasks_by_section --title "Tasks by column" --x 0 --y 4 --w 6 --h 4
+taskana-cli widget add $D completion_over_time --title "Completed, 30 days" --config '{"days":30}' --x 6 --y 4 --w 6 --h 4
+taskana-cli dashboard show $D                               # check the result; `widget data <id>` prints a widget's numbers
+```
+
+- Widget types: `task_count`, `tasks_by_section`, `tasks_by_assignee`, `tasks_by_priority`, `completion_over_time`,
+  `upcoming_deadlines`, `recently_completed`. Filters via `--section`, `--parent`, or `--config` JSON
+  (`sectionId`, `parentTaskId`, `assigneeId`, `includeCompleted`, `days`, `limit`).
+- Rearrange with `widget move <id> --x --y --w --h`; remove with `widget remove <id>`.
+- **Open questions are not a widget type yet.** They are shown in the project's Overview («Открытые вопросы») and on the
+  «Вопросы» screen; the "Waiting for the owner" count widget above is the dashboard-level proxy.
+- Do not create a second dashboard when one exists: `taskana-cli dashboard list` first.
 
 ## CLI reference
 
@@ -245,6 +278,14 @@ Questions (blockers for the owner):
                                                List questions of the bound project (--all: whole workspace)
   taskana-cli answer <qid> [<key>] [--comment "..."]   Answer: option and/or comment
   taskana-cli withdraw <qid>                   Withdraw an open question
+
+Dashboards (API token is enough):
+  taskana-cli dashboard list [--all]           Dashboards of the project (--all: workspace)
+  taskana-cli dashboard show <id>              Dashboard with widgets
+  taskana-cli dashboard create <name> [--workspace-wide] | delete <id>
+  taskana-cli widget add <dashboard_id> <type> [--title T] [--section <name>] [--parent <task_id>]
+        [--config '{"days":14}'] [--x N] [--y N] [--w N] [--h N]
+  taskana-cli widget move <id> [--x N] [--y N] [--w N] [--h N]   |   widget remove <id>   |   widget data <id>
 
 Project:
   taskana-cli members                          List members

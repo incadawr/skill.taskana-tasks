@@ -95,6 +95,21 @@ Usage:
     taskana-cli answer <qid> [<key>] [--comment "..."]  Answer (option and/or comment)
     taskana-cli withdraw <qid>                   Withdraw an open question
 
+  Dashboards (widgets; API token is enough):
+    taskana-cli dashboard list [--all]           Dashboards of the bound project (--all: whole workspace)
+    taskana-cli dashboard show <id>              Dashboard with its widgets (id, type, grid, config)
+    taskana-cli dashboard create <name> [--workspace-wide]
+                                                 Create a dashboard (bound to the project unless --workspace-wide)
+    taskana-cli dashboard delete <id>            Delete a dashboard with its widgets
+    taskana-cli widget add <dashboard_id> <type> [--title T] [--section <name>] [--parent <task_id>]
+                  [--config '{"days":14}'] [--x N] [--y N] [--w N] [--h N]
+                                                 Add a widget. Types: task_count, tasks_by_section,
+                                                 tasks_by_assignee, tasks_by_priority, completion_over_time,
+                                                 upcoming_deadlines, recently_completed
+    taskana-cli widget move <id> [--x N] [--y N] [--w N] [--h N]  Move/resize (12-column grid)
+    taskana-cli widget remove <id>               Remove a widget
+    taskana-cli widget data <id>                 Print the computed data of a widget
+
   Project:
     taskana-cli members                          List project members
     taskana-cli project-create <name> [--workspace <gid>] [--team <gid>]
@@ -118,7 +133,7 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 DEFAULT_BASE_URL = "https://taskana.tgai.app/api/1.0"
 
 
@@ -507,6 +522,129 @@ def cmd_section_move(token, config, section_name, before=None, after=None):
     print(f"Section \"{section['name']}\" moved {where} \"{anchor['name']}\"")
 
 
+# ── Dashboards & widgets ────────────────────────────────────────────────────
+
+WIDGET_TYPES = ["task_count", "tasks_by_section", "tasks_by_assignee", "tasks_by_priority",
+                "completion_over_time", "upcoming_deadlines", "recently_completed"]
+GRID_FLAGS = {"--x": "grid_x", "--y": "grid_y", "--w": "grid_w", "--h": "grid_h"}
+
+
+def format_widget(w):
+    cfg = json.dumps(w.get("config") or {}, ensure_ascii=False)
+    title = w.get("title") or "(no title)"
+    return (f"  widget #{w['gid']} {w['widget_type']}  \"{title}\"  "
+            f"grid x={w['grid_x']} y={w['grid_y']} w={w['grid_w']} h={w['grid_h']}  config={cfg}")
+
+
+def cmd_dashboard_list(token, config, all_projects=False):
+    params = []
+    if config.get("workspaceId"):
+        params.append(f"workspace={config['workspaceId']}")
+    if config.get("projectId") and not all_projects:
+        params.append(f"project={config['projectId']}")
+    qs = ("?" + "&".join(params)) if params else ""
+    dashboards = api("GET", f"/dashboards{qs}", token)
+    if not dashboards:
+        print("No dashboards (create one: taskana-cli dashboard create <name>)")
+        return
+    for d in dashboards:
+        proj = f"  project {d['project']['gid']}" if d.get("project") else "  workspace-wide"
+        print(f"#{d['gid']}  {d['name']}{proj}")
+
+
+def cmd_dashboard_show(token, dashboard_id):
+    d = api("GET", f"/dashboards/{dashboard_id}", token)
+    proj = f", project {d['project']['gid']}" if d.get("project") else ", workspace-wide"
+    print(f"Dashboard #{d['gid']}  {d['name']}{proj}")
+    widgets = d.get("widgets") or []
+    if not widgets:
+        print("  (no widgets - add: taskana-cli widget add <id> <type> --title ...)")
+    for w in widgets:
+        print(format_widget(w))
+
+
+def cmd_dashboard_create(token, config, name, workspace_wide=False):
+    data = {"name": name}
+    if config.get("projectId") and not workspace_wide:
+        data["project"] = config["projectId"]
+    d = api("POST", "/dashboards", token, {"data": data})
+    print(f"Dashboard #{d['gid']} created: {d['name']}")
+
+
+def cmd_dashboard_delete(token, dashboard_id):
+    api("DELETE", f"/dashboards/{dashboard_id}", token)
+    print(f"Dashboard #{dashboard_id} deleted")
+
+
+def parse_grid_flags(rest):
+    """Split args into (positional, grid dict, other flags dict). Flags: --x --y --w --h --title --config --section --parent."""
+    positional, grid, opts = [], {}, {}
+    i = 0
+    while i < len(rest):
+        a = rest[i]
+        if a in GRID_FLAGS and i + 1 < len(rest):
+            try:
+                grid[GRID_FLAGS[a]] = int(rest[i + 1])
+            except ValueError:
+                print(f"{a} expects an integer", file=sys.stderr)
+                sys.exit(1)
+            i += 1
+        elif a in ("--title", "--config", "--section", "--parent") and i + 1 < len(rest):
+            opts[a[2:]] = rest[i + 1]
+            i += 1
+        else:
+            positional.append(a)
+        i += 1
+    return positional, grid, opts
+
+
+def cmd_widget_add(token, config, dashboard_id, widget_type, grid, opts):
+    if widget_type not in WIDGET_TYPES:
+        print(f"Unknown widget type '{widget_type}'. Types: {', '.join(WIDGET_TYPES)}", file=sys.stderr)
+        sys.exit(1)
+    cfg = {}
+    if opts.get("config"):
+        try:
+            cfg = json.loads(opts["config"])
+            assert isinstance(cfg, dict)
+        except (ValueError, AssertionError):
+            print("--config must be a JSON object, e.g. '{\"days\": 14}'", file=sys.stderr)
+            sys.exit(1)
+    if opts.get("section"):
+        if not config.get("projectId"):
+            print("--section needs a bound project (or --project <gid>)", file=sys.stderr)
+            sys.exit(1)
+        cfg["sectionId"] = int(find_section(token, config["projectId"], opts["section"])["gid"])
+    if opts.get("parent"):
+        cfg["parentTaskId"] = int(opts["parent"])
+    data = {"widget_type": widget_type, **grid}
+    if opts.get("title"):
+        data["title"] = opts["title"]
+    if cfg:
+        data["config"] = cfg
+    w = api("POST", f"/dashboards/{dashboard_id}/widgets", token, {"data": data})
+    print(f"Widget #{w['gid']} added to dashboard #{dashboard_id}")
+    print(format_widget(w))
+
+
+def cmd_widget_move(token, widget_id, grid):
+    if not grid:
+        print("Nothing to change: pass --x/--y/--w/--h", file=sys.stderr)
+        sys.exit(1)
+    w = api("PUT", f"/widgets/{widget_id}", token, {"data": grid})
+    print(f"Widget #{widget_id} updated")
+    print(format_widget(w))
+
+
+def cmd_widget_remove(token, widget_id):
+    api("DELETE", f"/widgets/{widget_id}", token)
+    print(f"Widget #{widget_id} removed")
+
+
+def cmd_widget_data(token, widget_id):
+    print(json.dumps(api("GET", f"/widgets/{widget_id}/data", token), ensure_ascii=False, indent=2))
+
+
 # ── Questions (blocking questions with answer options) ──────────────────────
 
 def parse_option(text, index):
@@ -566,6 +704,14 @@ def format_question(q, detail=True):
 
 def cmd_ask(token, task_id, question, options, recommend=None, context=None,
             allow_free_text=True, agent=None):
+    # Soft quality gate: the owner decides from the option descriptions, so warn (not fail) when missing
+    for o in options:
+        if not o.get("description"):
+            print(f"WARNING: option {o['key']} has no description. Add one: --option \"{o['key']}: {o['label']} | "
+                  "what it leads to / cost\"", file=sys.stderr)
+    if not context:
+        print("WARNING: no --context. Say what this question blocks and why you recommend your option.",
+              file=sys.stderr)
     data = {"question": question, "options": options, "allow_free_text": allow_free_text}
     if recommend:
         data["recommended_key"] = recommend
@@ -1858,7 +2004,7 @@ def main():
                        "blocks", "block", "unblock", "rename", "reopen",
                        "description", "history", "comments", "task-fields", "task-field-set",
                        "estimate", "attachments", "download", "upload",
-                       "ask", "answer", "withdraw"}
+                       "ask", "answer", "withdraw", "dashboard", "widget"}
         if args[0] in id_commands:
             print(f"ERROR: '--target all' cannot be used with '{args[0]}' — task IDs differ between backends.", file=sys.stderr)
             print("Use '--target <name>' to specify which backend.", file=sys.stderr)
@@ -2001,6 +2147,38 @@ def _run_command(cmd, args, token, config):
             print("Usage: taskana-cli section-move <section> --before <other> | --after <other>", file=sys.stderr)
             sys.exit(1)
         cmd_section_move(token, config, " ".join(names), before, after)
+    elif cmd == "dashboard":
+        sub = args[1] if len(args) > 1 else ""
+        rest = args[2:]
+        if sub in ("list", "ls"):
+            cmd_dashboard_list(token, config, "--all" in rest)
+        elif sub == "show" and rest:
+            cmd_dashboard_show(token, rest[0])
+        elif sub == "create" and [a for a in rest if a != "--workspace-wide"]:
+            cmd_dashboard_create(token, config, " ".join(a for a in rest if a != "--workspace-wide"),
+                                 "--workspace-wide" in rest)
+        elif sub == "delete" and rest:
+            cmd_dashboard_delete(token, rest[0])
+        else:
+            print("Usage: taskana-cli dashboard list [--all] | show <id> | create <name> [--workspace-wide] | delete <id>",
+                  file=sys.stderr)
+            sys.exit(1)
+    elif cmd == "widget":
+        sub = args[1] if len(args) > 1 else ""
+        positional, grid, opts = parse_grid_flags(args[2:])
+        if sub == "add" and len(positional) == 2:
+            cmd_widget_add(token, config, positional[0], positional[1], grid, opts)
+        elif sub == "move" and len(positional) == 1:
+            cmd_widget_move(token, positional[0], grid)
+        elif sub in ("remove", "rm", "delete") and len(positional) == 1:
+            cmd_widget_remove(token, positional[0])
+        elif sub == "data" and len(positional) == 1:
+            cmd_widget_data(token, positional[0])
+        else:
+            print("Usage: taskana-cli widget add <dashboard_id> <type> [--title T] [--section N] [--parent TASK] "
+                  "[--config JSON] [--x N --y N --w N --h N] | move <id> [--x --y --w --h] | remove <id> | data <id>\n"
+                  f"Types: {', '.join(WIDGET_TYPES)}", file=sys.stderr)
+            sys.exit(1)
     elif cmd == "ask":
         rest = args[1:]
         positional, options = [], []
