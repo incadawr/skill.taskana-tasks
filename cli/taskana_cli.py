@@ -34,7 +34,7 @@ Usage:
         --assign <user>                          Assign ("me", name, or email)
         --watch <user>                           Add watcher (repeatable)
     taskana-cli done <id>                        Mark completed + move to Done
-    taskana-cli start <id>                       Assign to me + move to In Progress
+    taskana-cli start <id>                       Assign to me + move to In Progress + clear the resume flag
     taskana-cli move <id> <section>              Move task to section
     taskana-cli assign <id> <user>               Assign ("me", name, or email)
     taskana-cli unassign <id>                    Remove assignee
@@ -95,6 +95,21 @@ Usage:
     taskana-cli answer <qid> [<key>] [--comment "..."]  Answer (option and/or comment)
     taskana-cli withdraw <qid>                   Withdraw an open question
 
+  Review (structured acceptance; replaces the free-form ПРИЕМКА comment):
+    taskana-cli submit <task_id> --check "item" [--check "item" ...] --how "how to run/verify"
+                  [--branch X] [--commits a,b] [--minutes N] [--agent <label>]
+                                                 Submit for review (task moves to "Review"); --minutes = owner's time
+    taskana-cli reviews [--returned] [--all]     Pending reviews of the bound project (--returned: returned to the agent,
+                                                 not yet picked up; --all: whole workspace)
+    taskana-cli accept <task_id> [--comment "..."]  Accept (task -> Done, completed)
+    taskana-cli return <task_id> --comment "..."    Return with a required comment (task -> In Progress)
+
+  Owner queue and agent resume queue:
+    taskana-cli inbox [--all-projects]           What waits for the owner: open questions + reviews, minutes total
+                                                 (bound project by default)
+    taskana-cli resume [--all]                   Tasks the owner answered / returned that nobody picked up yet,
+                                                 with the answers and comments inline. Run FIRST at session start.
+
   Dashboards (widgets; API token is enough):
     taskana-cli dashboard list [--all]           Dashboards of the bound project (--all: whole workspace)
     taskana-cli dashboard show <id>              Dashboard with its widgets (id, type, grid, config)
@@ -133,7 +148,7 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 DEFAULT_BASE_URL = "https://taskana.tgai.app/api/1.0"
 
 
@@ -429,6 +444,11 @@ def cmd_start(token, config, task_id):
     api("POST", f"/sections/{section['gid']}/addTask", token, {"data": {"task": task_id}})
 
     print(f"Task {task_id} assigned to {me['name']}, moved to \"{section['name']}\"")
+
+    # Picking the task up clears its "resume ready" flag (owner's answer / returned review seen)
+    ack = api_soft("POST", f"/tasks/{task_id}/resume/ack", token)
+    if ack and ack.get("cleared"):
+        print("Resume flag cleared")
 
 
 def cmd_move(token, config, task_id, section_name):
@@ -762,6 +782,157 @@ def cmd_answer(token, qid, key=None, comment=None):
 def cmd_withdraw(token, qid):
     api("POST", f"/questions/{qid}/withdraw", token)
     print(f"Question #{qid} withdrawn")
+
+
+def api_soft(method, path, token, body=None):
+    """api() that never aborts the command: returns None on any error (older servers, 404...)."""
+    import contextlib
+    import io
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):
+            return api(method, path, token, body)
+    except SystemExit:
+        return None
+
+
+# ── Reviews, inbox, resume ──────────────────────────────────────────────────
+
+def format_review(r, detail=True):
+    task = r.get("task") or {}
+    project = (r.get("project") or {}).get("name", "")
+    mins = r.get("estimated_minutes")
+    head = (f"task {task.get('gid')}  {task.get('name', '')}"
+            + (f"  ({project})" if project else "")
+            + f"  [{r.get('status')}, round {r.get('round')}]"
+            + (f"  ~{mins} min" if mins is not None else ""))
+    lines = [head]
+    if r.get("legacy"):
+        lines.append("  (submitted with a free-form comment, no checklist)")
+    if detail:
+        if r.get("how_to_verify"):
+            lines.append("  How: " + r["how_to_verify"].replace("\n", "\n       "))
+        for c in r.get("checklist") or []:
+            lines.append(f"    [ ] {c.get('text')}")
+        refs = []
+        if r.get("branch"):
+            refs.append(f"branch {r['branch']}")
+        if r.get("commits"):
+            refs.append("commits " + ", ".join(r["commits"]))
+        if refs:
+            lines.append("  " + "; ".join(refs))
+    if r.get("status") in ("returned", "accepted") and r.get("resolution"):
+        by = (r.get("resolved_by") or {}).get("name", "")
+        label = "RETURNED" if r["status"] == "returned" else "ACCEPTED"
+        lines.append(f"  {label}: {r['resolution']}" + (f"  ({by}, {r.get('resolved_at')})" if by else ""))
+    return "\n".join(lines)
+
+
+def cmd_submit(token, task_id, checks, how=None, branch=None, commits=None, minutes=None, agent=None):
+    if not checks and not how:
+        print("Need at least one --check and/or --how", file=sys.stderr)
+        sys.exit(1)
+    if not checks:
+        print('WARNING: no --check items. List what the owner should verify: --check "..." (repeatable).',
+              file=sys.stderr)
+    if minutes is None:
+        print("WARNING: no --minutes. Estimate the OWNER's time to accept this (the inbox sums it up).",
+              file=sys.stderr)
+    data = {"checklist": checks}
+    if how:
+        data["how_to_verify"] = how
+    if branch:
+        data["branch"] = branch
+    if commits:
+        data["commits"] = [c.strip() for c in commits.split(",") if c.strip()]
+    if minutes is not None:
+        data["estimated_minutes"] = minutes
+    agent = agent or os.environ.get("TASKANA_AGENT")
+    if agent:
+        data["agent_label"] = agent
+    r = api("POST", f"/tasks/{task_id}/reviews", token, {"data": data})
+    print(f"Task {task_id} submitted for review (round {r.get('round')}), moved to \"Review\" "
+          "(if the project has that section)")
+    print("Check the outcome later: taskana-cli reviews --returned   |   taskana-cli resume")
+
+
+def cmd_reviews(token, config, returned=False, all_projects=False):
+    params = ["status=returned&unacked=true" if returned else "status=pending"]
+    if config.get("workspaceId"):
+        params.append(f"workspace={config['workspaceId']}")
+    if config.get("projectId") and not all_projects:
+        params.append(f"project={config['projectId']}")
+    reviews = api("GET", "/reviews?" + "&".join(params), token)
+    if not reviews:
+        print("No returned reviews" if returned else "No pending reviews")
+        return
+    for r in reviews:
+        print(format_review(r))
+        print()
+    print(f"Total: {len(reviews)}")
+
+
+def cmd_accept(token, task_id, comment=None):
+    data = {"comment": comment} if comment else {}
+    api("POST", f"/tasks/{task_id}/review/accept", token, {"data": data})
+    print(f"Task {task_id} accepted (completed, moved to Done)")
+
+
+def cmd_return(token, task_id, comment):
+    api("POST", f"/tasks/{task_id}/review/return", token, {"data": {"comment": comment}})
+    print(f"Task {task_id} returned to the agent (moved back to work; it shows up in `taskana-cli resume`)")
+
+
+def cmd_inbox(token, config, all_projects=False):
+    params = []
+    if config.get("workspaceId"):
+        params.append(f"workspace={config['workspaceId']}")
+    if config.get("projectId") and not all_projects:
+        params.append(f"project={config['projectId']}")
+    qs = ("?" + "&".join(params)) if params else ""
+    inbox = api("GET", f"/inbox{qs}", token)
+    totals = inbox["totals"]
+    if not totals["total"]:
+        print("Inbox is empty - nothing waits for the owner")
+        return
+    for g in inbox["projects"]:
+        pname = g["project"]["name"]
+        print(f"== {pname}: {g['questions']} questions, {g['reviews']} reviews"
+              + (f", ~{g['minutes']} min" if g["minutes"] else ""))
+        for q in inbox["questions"]:
+            if q["project"]["gid"] == g["project"]["gid"]:
+                print("  " + format_question(q, detail=False).replace("\n", "\n  "))
+        for r in inbox["reviews"]:
+            if r["project"]["gid"] == g["project"]["gid"]:
+                print("  " + format_review(r, detail=False).replace("\n", "\n  "))
+        print()
+    extra = f" ({totals['unestimated']} reviews without an estimate)" if totals.get("unestimated") else ""
+    print(f"Total: {totals['questions']} questions, {totals['reviews']} reviews, "
+          f"~{totals['minutes']} min of acceptance{extra}")
+
+
+def cmd_resume(token, config, all_projects=False):
+    params = []
+    if config.get("workspaceId"):
+        params.append(f"workspace={config['workspaceId']}")
+    if config.get("projectId") and not all_projects:
+        params.append(f"project={config['projectId']}")
+    qs = ("?" + "&".join(params)) if params else ""
+    items = api("GET", f"/resume{qs}", token)
+    if not items:
+        print("Nothing to resume")
+        return
+    for it in items:
+        t = it["task"]
+        proj = (it.get("project") or {}).get("name", "")
+        sec = (it.get("section") or {}).get("name", "")
+        print(f"#{t['gid']}  {t.get('name', '')}  ({proj}, {sec})  reason: {it.get('reason')}  since {it.get('resume_at')}")
+        for q in it.get("answers") or []:
+            print("  " + format_question(q, detail=False).replace("\n", "\n  "))
+        for r in it.get("returned_reviews") or []:
+            print("  " + format_review(r, detail=False).replace("\n", "\n  "))
+        print(f"  -> taskana-cli start {t['gid']}")
+        print()
+    print(f"Total: {len(items)}")
 
 
 def cmd_search(token, config, query):
@@ -2004,7 +2175,8 @@ def main():
                        "blocks", "block", "unblock", "rename", "reopen",
                        "description", "history", "comments", "task-fields", "task-field-set",
                        "estimate", "attachments", "download", "upload",
-                       "ask", "answer", "withdraw", "dashboard", "widget"}
+                       "ask", "answer", "withdraw", "dashboard", "widget",
+                       "submit", "accept", "return"}
         if args[0] in id_commands:
             print(f"ERROR: '--target all' cannot be used with '{args[0]}' — task IDs differ between backends.", file=sys.stderr)
             print("Use '--target <name>' to specify which backend.", file=sys.stderr)
@@ -2246,6 +2418,64 @@ def _run_command(cmd, args, token, config):
             print("Usage: taskana-cli withdraw <question_id>", file=sys.stderr)
             sys.exit(1)
         cmd_withdraw(token, args[1])
+    elif cmd == "submit":
+        rest = args[1:]
+        positional, checks = [], []
+        how = branch = commits = agent = None
+        minutes = None
+        i = 0
+        while i < len(rest):
+            a = rest[i]
+            if a in ("--check", "-c") and i + 1 < len(rest):
+                checks.append(rest[i + 1]); i += 1
+            elif a == "--how" and i + 1 < len(rest):
+                how = rest[i + 1]; i += 1
+            elif a == "--branch" and i + 1 < len(rest):
+                branch = rest[i + 1]; i += 1
+            elif a == "--commits" and i + 1 < len(rest):
+                commits = rest[i + 1]; i += 1
+            elif a == "--minutes" and i + 1 < len(rest):
+                try:
+                    minutes = int(rest[i + 1])
+                except ValueError:
+                    print("--minutes must be an integer", file=sys.stderr)
+                    sys.exit(1)
+                i += 1
+            elif a == "--agent" and i + 1 < len(rest):
+                agent = rest[i + 1]; i += 1
+            else:
+                positional.append(a)
+            i += 1
+        if len(positional) != 1:
+            print('Usage: taskana-cli submit <task_id> --check "..." [--check "..."] --how "..." '
+                  '[--branch X] [--commits a,b] [--minutes N] [--agent <label>]', file=sys.stderr)
+            sys.exit(1)
+        cmd_submit(token, positional[0], checks, how, branch, commits, minutes, agent)
+    elif cmd == "reviews":
+        cmd_reviews(token, config, returned="--returned" in args[1:], all_projects="--all" in args[1:])
+    elif cmd in ("accept", "return"):
+        rest = args[1:]
+        positional, comment = [], None
+        i = 0
+        while i < len(rest):
+            if rest[i] in ("--comment", "-c") and i + 1 < len(rest):
+                comment = rest[i + 1]; i += 1
+            else:
+                positional.append(rest[i])
+            i += 1
+        if len(positional) != 1 or (cmd == "return" and not comment):
+            usage = ('taskana-cli accept <task_id> [--comment "..."]' if cmd == "accept"
+                     else 'taskana-cli return <task_id> --comment "..."  (comment is required)')
+            print("Usage: " + usage, file=sys.stderr)
+            sys.exit(1)
+        if cmd == "accept":
+            cmd_accept(token, positional[0], comment)
+        else:
+            cmd_return(token, positional[0], comment)
+    elif cmd == "inbox":
+        cmd_inbox(token, config, all_projects="--all-projects" in args[1:] or "--all" in args[1:])
+    elif cmd == "resume":
+        cmd_resume(token, config, all_projects="--all" in args[1:])
     elif cmd in ("search", "find"):
         if len(args) < 2:
             print("Usage: taskana-cli search <query>", file=sys.stderr)

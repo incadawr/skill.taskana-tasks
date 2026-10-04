@@ -91,6 +91,18 @@ Read `.claude-team/taskana.json` for project config.
 If `.claude-team/RULES.md` exists, read it and follow the workflow rules defined there.
 Rules override the defaults below.
 
+## Session start (agents): resume first, then board
+
+```bash
+taskana-cli resume          # tasks the owner answered / returned and nobody picked up yet - answers inline
+taskana-cli board           # then the whole roadmap
+```
+
+`resume` lists tasks whose last blocking question was answered or whose review was returned, with the owner's answer
+(option + comment) or the return comment printed inline. **Handle these before taking new work.** Each entry ends with
+`taskana-cli start <id>` - running it assigns the task to you, moves it to In Progress and **clears the resume flag**
+(other sessions then stop seeing it). `resume --all` covers every project of the workspace.
+
 ## Default workflow
 
 ### When developer asks "what to work on?" or similar:
@@ -116,6 +128,9 @@ taskana-cli estimate <id> <hours>
 ```
 
 ### When completing a task:
+
+Agent work goes through the owner's acceptance: use `taskana-cli submit` (see "Finishing work" below), not `done`.
+`done` is for tasks that need no acceptance:
 
 ```bash
 taskana-cli done <id>             # marks completed + moves to Done
@@ -159,8 +174,37 @@ taskana-cli questions                          # still-open questions of this pr
 ```
 
 An answer is a chosen option and/or a free-text comment («B, but without X») — read both. The same answer is also posted to the
-task as a comment `ОТВЕТ: <key> — <label>. Комментарий: …`, and the task returns to its previous section automatically.
+task as a comment `ОТВЕТ: <key> — <label>. Комментарий: …`, and the task returns to its previous section automatically
+(a task that came from Backlog, or from "Waiting Owner" itself, is lifted to "Next") and is flagged **resume-ready**: it appears
+in `taskana-cli resume` with the answer inline until someone runs `taskana-cli start <id>`.
 Apply the decision, then continue the task (`taskana-cli start <id>`).
+
+### Finishing work: submit for review with `submit` (not a free-form ПРИЕМКА comment)
+
+When the work is ready for the owner's acceptance, submit a structured **review card**. The task moves to "Review"; the owner
+sees the checklist, run instructions and estimated time in the Taskana task page and in the «Мне на решение» screen, and accepts
+or returns it with one click.
+
+```bash
+taskana-cli submit <task_id> \
+    --check "Open /settings, the new toggle is visible" --check "Toggle persists after reload" \
+    --how "docker compose up -d --build; open http://localhost:5173/settings" \
+    --branch feature/123-toggle --commits a1b2c3,d4e5f6 --minutes 10 \
+    --agent "claude · <session label>"
+```
+
+- `--check` (repeatable): concrete things the owner should verify, one action + expected result each.
+- `--how`: exact steps to run it locally (commands, URLs, test accounts, caveats).
+- `--minutes`: the **owner's** time to accept (not yours); the inbox sums it so the owner can plan "I have 90 minutes".
+- `--branch` / `--commits`: where the code is (comma separated commits). Submitting again replaces a pending card (new round).
+- Do NOT also write a free-form `ПРИЕМКА:` comment - `submit` posts one automatically.
+- Do NOT `done` the task yourself; the owner accepts: `taskana-cli accept <id> [--comment]` / `taskana-cli return <id> --comment "..."`.
+
+**A returned review is not a failure**: the task goes back to In Progress, the owner's comment (`ВОЗВРАТ: ...`) is on the task,
+and it shows in `taskana-cli resume` (also `taskana-cli reviews --returned`). Fix the points, `start` the task, `submit` again.
+
+What waits for the owner overall: `taskana-cli inbox` (bound project) / `taskana-cli inbox --all-projects`; pending reviews:
+`taskana-cli reviews [--all]`.
 
 ### Dashboards: assemble a roadmap dashboard for a project
 
@@ -278,6 +322,16 @@ Questions (blockers for the owner):
                                                List questions of the bound project (--all: whole workspace)
   taskana-cli answer <qid> [<key>] [--comment "..."]   Answer: option and/or comment
   taskana-cli withdraw <qid>                   Withdraw an open question
+
+Review / inbox / resume:
+  taskana-cli submit <id> --check "..." [--check "..."] --how "..." [--branch X] [--commits a,b] [--minutes N] [--agent <label>]
+                                               Submit for review (moves to Review)
+  taskana-cli reviews [--returned] [--all]     Pending reviews (--returned: returned, not yet picked up)
+  taskana-cli accept <id> [--comment "..."]    Accept (owner): task -> Done
+  taskana-cli return <id> --comment "..."      Return (owner): task -> In Progress, comment required
+  taskana-cli inbox [--all-projects]           Questions + reviews waiting for the owner, total minutes
+  taskana-cli resume [--all]                   Answered/returned tasks nobody picked up yet (answers inline)
+  taskana-cli start <id>                       ... also clears the resume flag
 
 Dashboards (API token is enough):
   taskana-cli dashboard list [--all]           Dashboards of the project (--all: workspace)
