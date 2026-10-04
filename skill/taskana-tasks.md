@@ -129,6 +129,35 @@ Use prefixes from `taskana.json` config if defined:
 taskana-cli create "[Prefix] Task name" --notes "details"
 ```
 
+### Blockers: ask the owner with `ask` (not comment + move)
+
+When you cannot continue without the owner's decision, create a structured **question** instead of a free-text comment
+and a manual move to "Waiting Owner". The task parks itself in the project's `Waiting Owner` section (if it exists),
+the owner sees the question on the «Вопросы» screen and answers with one click.
+
+```bash
+taskana-cli ask <task_id> "Which queue do we use for workers?" \
+    --option "A: BullMQ | already in the stack" --option "B: pg-boss" --option "C: own cron" \
+    --recommend A --context "Short background: constraints, what you tried, what depends on it" \
+    --agent "claude · <session label>"
+```
+
+- Give 2-4 concrete options (`KEY: label`, optional ` | note`), always say which one you recommend and why (in `--context`).
+- One decision = one question. Several open questions on a task are fine.
+- Then **move on to another task** — do not wait or poll in a loop.
+- Withdraw a question that became irrelevant: `taskana-cli withdraw <qid>`.
+
+**At the start of every session** check for answers before picking work:
+
+```bash
+taskana-cli questions --answered --since 1d    # answers since yesterday (or since your last session)
+taskana-cli questions                          # still-open questions of this project
+```
+
+An answer is a chosen option and/or a free-text comment («B, but without X») — read both. The same answer is also posted to the
+task as a comment `ОТВЕТ: <key> — <label>. Комментарий: …`, and the task returns to its previous section automatically.
+Apply the decision, then continue the task (`taskana-cli start <id>`).
+
 ## CLI reference
 
 ```
@@ -207,6 +236,15 @@ Sections:
   taskana-cli section-create <name>            Create section
   taskana-cli section-rename <old> <new>       Rename section
   taskana-cli section-delete <name>            Delete section
+  taskana-cli section-move <name> --before|--after <other>  Reorder section
+
+Questions (blockers for the owner):
+  taskana-cli ask <id> "question" --option "A: label" --option "B: label | note"
+        [--recommend B] [--context "..."] [--no-free-text] [--agent <label>]   Ask; task parks in "Waiting Owner"
+  taskana-cli questions [--open|--answered|--all-statuses] [--since <iso|2h|1d>] [--all]
+                                               List questions of the bound project (--all: whole workspace)
+  taskana-cli answer <qid> [<key>] [--comment "..."]   Answer: option and/or comment
+  taskana-cli withdraw <qid>                   Withdraw an open question
 
 Project:
   taskana-cli members                          List members

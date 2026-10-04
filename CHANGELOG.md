@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.0 (2026-10-04)
+- Add blocking questions: `ask`, `questions [--open|--answered|--all-statuses] [--since] [--all]`, `answer`, `withdraw`
+  (requires Taskana with the questions API; answer = option and/or comment)
+- Add `section-move <name> --before|--after <other>` (uses `POST /projects/:id/sections/insert`)
+- Fix `section-delete` and other bodiless calls failing with 400 "Body cannot be empty": no JSON Content-Type without a body
+- `find_section` prefers an exact name match over a substring match
+- Skill: agent flow for blockers (ask instead of comment + move; check `questions --answered` at session start)
+
 ## 1.1.0 (2026-04-09)
 - Add attachment support: `attachments`, `download`, `upload` commands
 - List attachments on tasks, download by ID, upload files via multipart

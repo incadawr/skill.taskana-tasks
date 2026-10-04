@@ -84,6 +84,16 @@ Usage:
     taskana-cli section-create <name>            Create section
     taskana-cli section-rename <old> <new>       Rename section
     taskana-cli section-delete <name>            Delete section
+    taskana-cli section-move <name> --before|--after <other>  Reorder section
+
+  Questions (blockers for the owner):
+    taskana-cli ask <task_id> "question" --option "A: label" --option "B: label | note"
+                  [--recommend B] [--context "..."] [--no-free-text] [--agent <label>]
+                                                 Ask the owner; task parks in "Waiting Owner"
+    taskana-cli questions [--open|--answered|--all-statuses] [--since <iso|2h|1d>] [--all]
+                                                 List questions of the bound project (--all: whole workspace)
+    taskana-cli answer <qid> [<key>] [--comment "..."]  Answer (option and/or comment)
+    taskana-cli withdraw <qid>                   Withdraw an open question
 
   Project:
     taskana-cli members                          List project members
@@ -108,7 +118,7 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 DEFAULT_BASE_URL = "https://taskana.tgai.app/api/1.0"
 
 
@@ -215,12 +225,14 @@ def api(method, path, token, body=None, base_url=None):
     """Make API request. Auto-paginates list responses."""
     resolved_base = base_url or ACTIVE_BASE_URL
     url = f"{resolved_base}{path}"
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-    }
+    headers = {"Authorization": f"Bearer {token}"}
 
-    data = json.dumps(body).encode() if body else None
+    # Send Content-Type only together with a body: the server rejects an empty
+    # body under "application/json" (400), which broke DELETE and other bodiless calls.
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode()
+        headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
 
     try:
@@ -275,6 +287,9 @@ def find_section(token, project_id, name):
     """Find section by name (fuzzy match)."""
     sections = get_sections(token, project_id)
     lower = name.lower().replace(" ", "")
+    for s in sections:
+        if lower == s["name"].lower().replace(" ", ""):
+            return s
     for s in sections:
         if lower in s["name"].lower().replace(" ", ""):
             return s
@@ -475,6 +490,132 @@ def cmd_section_delete(token, config, section_name):
     section = find_section(token, project_id, section_name)
     api("DELETE", f"/sections/{section['gid']}", token)
     print(f"Section \"{section['name']}\" deleted")
+
+
+def cmd_section_move(token, config, section_name, before=None, after=None):
+    project_id = config["projectId"]
+    section = find_section(token, project_id, section_name)
+    anchor_name = before or after
+    anchor = find_section(token, project_id, anchor_name)
+    if anchor["gid"] == section["gid"]:
+        print("Section and anchor are the same section", file=sys.stderr)
+        sys.exit(1)
+    data = {"section": section["gid"]}
+    data["before_section" if before else "after_section"] = anchor["gid"]
+    api("POST", f"/projects/{project_id}/sections/insert", token, {"data": data})
+    where = "before" if before else "after"
+    print(f"Section \"{section['name']}\" moved {where} \"{anchor['name']}\"")
+
+
+# ── Questions (blocking questions with answer options) ──────────────────────
+
+def parse_option(text, index):
+    """'B: MariaDB | what we run' -> {key, label, description}. Without 'KEY:' the key is A, B, C..."""
+    desc = None
+    if " | " in text:
+        text, desc = text.split(" | ", 1)
+    key, sep, label = text.partition(":")
+    key, label = key.strip(), label.strip()
+    if not sep or not label or " " in key or len(key) > 20:
+        key, label = chr(ord("A") + index), text.strip()
+    opt = {"key": key, "label": label}
+    if desc and desc.strip():
+        opt["description"] = desc.strip()
+    return opt
+
+
+def parse_since(value):
+    """ISO timestamp as-is; '30m' / '2h' / '1d' = relative to now."""
+    import re
+    from datetime import datetime, timedelta, timezone
+    m = re.fullmatch(r"(\d+)([mhd])", value.strip())
+    if not m:
+        return value
+    delta = {"m": timedelta(minutes=int(m[1])), "h": timedelta(hours=int(m[1])),
+             "d": timedelta(days=int(m[1]))}[m[2]]
+    return (datetime.now(timezone.utc) - delta).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def format_question(q, detail=True):
+    status = q.get("status")
+    task = q.get("task") or {}
+    project = (q.get("project") or {}).get("name", "")
+    head = f"#{q['gid']} [{status}] task {task.get('gid')}  {task.get('name', '')}"
+    if project:
+        head += f"  ({project})"
+    lines = [head, f"  Q: {q.get('question')}"]
+    if detail and q.get("context"):
+        lines.append("  Context: " + q["context"].replace("\n", "\n           "))
+    if status == "open":
+        for o in q.get("options") or []:
+            star = " *" if o["key"] == q.get("recommended_key") else ""
+            desc = f" - {o['description']}" if o.get("description") else ""
+            lines.append(f"    {o['key']}) {o['label']}{star}{desc}")
+        if q.get("recommended_key"):
+            lines.append("    (* = recommended)")
+    elif status == "answered":
+        ans = []
+        if q.get("answer_key"):
+            ans.append(f"{q['answer_key']} - {q.get('answer_label') or ''}")
+        if q.get("answer_comment"):
+            ans.append(f"comment: {q['answer_comment']}")
+        by = (q.get("answered_by") or {}).get("name", "")
+        lines.append(f"  ANSWER: {'; '.join(ans)}" + (f"  ({by}, {q.get('answered_at')})" if by else ""))
+    return "\n".join(lines)
+
+
+def cmd_ask(token, task_id, question, options, recommend=None, context=None,
+            allow_free_text=True, agent=None):
+    data = {"question": question, "options": options, "allow_free_text": allow_free_text}
+    if recommend:
+        data["recommended_key"] = recommend
+    if context:
+        data["context"] = context
+    agent = agent or os.environ.get("TASKANA_AGENT")
+    if agent:
+        data["agent_label"] = agent
+    q = api("POST", f"/tasks/{task_id}/questions", token, {"data": data})
+    print(f"Question #{q['gid']} asked on task {task_id}")
+    print("The task is parked in 'Waiting Owner' (if the project has that section). "
+          f"Check later: taskana-cli questions --answered   |   taskana-cli questions --all")
+
+
+def cmd_questions(token, config, status="open", since=None, all_projects=False):
+    params = []
+    if status != "all":
+        params.append(f"status={status}")
+    if since:
+        import urllib.parse
+        params.append("since=" + urllib.parse.quote(parse_since(since)))
+    if config.get("workspaceId"):
+        params.append(f"workspace={config['workspaceId']}")
+    if config.get("projectId") and not all_projects:
+        params.append(f"project={config['projectId']}")
+    qs = ("?" + "&".join(params)) if params else ""
+    questions = api("GET", f"/questions{qs}", token)
+    if not questions:
+        print(f"No {status if status != 'all' else ''} questions".replace("  ", " "))
+        return
+    for q in questions:
+        print(format_question(q))
+        print()
+    print(f"Total: {len(questions)}")
+
+
+def cmd_answer(token, qid, key=None, comment=None):
+    data = {}
+    if key:
+        data["key"] = key
+    if comment:
+        data["comment"] = comment
+    q = api("POST", f"/questions/{qid}/answer", token, {"data": data})
+    print(f"Question #{qid} answered")
+    print(format_question(q, detail=False))
+
+
+def cmd_withdraw(token, qid):
+    api("POST", f"/questions/{qid}/withdraw", token)
+    print(f"Question #{qid} withdrawn")
 
 
 def cmd_search(token, config, query):
@@ -1716,7 +1857,8 @@ def main():
                        "tags", "tag", "untag", "deps", "dep", "undep",
                        "blocks", "block", "unblock", "rename", "reopen",
                        "description", "history", "comments", "task-fields", "task-field-set",
-                       "estimate", "attachments", "download", "upload"}
+                       "estimate", "attachments", "download", "upload",
+                       "ask", "answer", "withdraw"}
         if args[0] in id_commands:
             print(f"ERROR: '--target all' cannot be used with '{args[0]}' — task IDs differ between backends.", file=sys.stderr)
             print("Use '--target <name>' to specify which backend.", file=sys.stderr)
@@ -1758,7 +1900,7 @@ def _run_command(cmd, args, token, config):
     """Execute a single command against one target."""
     # Commands that need projectId
     needs_project = {"list", "ls", "my", "overview", "board", "sections",
-                     "section-create", "section-rename", "section-delete",
+                     "section-create", "section-rename", "section-delete", "section-move",
                      "members", "search", "find", "create", "add",
                      "custom-fields", "custom-field-create", "estimate"}
     if cmd in needs_project and not config.get("projectId"):
@@ -1840,6 +1982,92 @@ def _run_command(cmd, args, token, config):
             print("Usage: taskana-cli section-delete <section>", file=sys.stderr)
             sys.exit(1)
         cmd_section_delete(token, config, " ".join(args[1:]))
+    elif cmd == "section-move":
+        rest = args[1:]
+        before = after = None
+        names = []
+        i = 0
+        while i < len(rest):
+            if rest[i] == "--before" and i + 1 < len(rest):
+                before = rest[i + 1]
+                i += 1
+            elif rest[i] == "--after" and i + 1 < len(rest):
+                after = rest[i + 1]
+                i += 1
+            else:
+                names.append(rest[i])
+            i += 1
+        if not names or bool(before) == bool(after):
+            print("Usage: taskana-cli section-move <section> --before <other> | --after <other>", file=sys.stderr)
+            sys.exit(1)
+        cmd_section_move(token, config, " ".join(names), before, after)
+    elif cmd == "ask":
+        rest = args[1:]
+        positional, options = [], []
+        recommend = context = agent = None
+        allow_free = True
+        i = 0
+        while i < len(rest):
+            a = rest[i]
+            if a in ("--option", "-o") and i + 1 < len(rest):
+                options.append(rest[i + 1]); i += 1
+            elif a in ("--recommend", "-r") and i + 1 < len(rest):
+                recommend = rest[i + 1]; i += 1
+            elif a in ("--context", "-c") and i + 1 < len(rest):
+                context = rest[i + 1]; i += 1
+            elif a == "--agent" and i + 1 < len(rest):
+                agent = rest[i + 1]; i += 1
+            elif a == "--no-free-text":
+                allow_free = False
+            else:
+                positional.append(a)
+            i += 1
+        if len(positional) < 2:
+            print('Usage: taskana-cli ask <task_id> "question" [--option "A: label" ...] [--recommend KEY] '
+                  '[--context "..."] [--no-free-text] [--agent <label>]', file=sys.stderr)
+            sys.exit(1)
+        parsed = [parse_option(o, n) for n, o in enumerate(options)]
+        if not parsed and not allow_free:
+            print("Need at least one --option when --no-free-text is set", file=sys.stderr)
+            sys.exit(1)
+        cmd_ask(token, positional[0], " ".join(positional[1:]), parsed, recommend, context, allow_free, agent)
+    elif cmd == "questions":
+        status = "open"
+        since = None
+        all_projects = False
+        i = 1
+        while i < len(args):
+            if args[i] == "--open":
+                status = "open"
+            elif args[i] == "--answered":
+                status = "answered"
+            elif args[i] in ("--all-statuses", "--any"):
+                status = "all"
+            elif args[i] == "--all":
+                all_projects = True
+            elif args[i] == "--since" and i + 1 < len(args):
+                since = args[i + 1]; i += 1
+            i += 1
+        cmd_questions(token, config, status, since, all_projects)
+    elif cmd == "answer":
+        rest = args[1:]
+        positional, comment = [], None
+        i = 0
+        while i < len(rest):
+            if rest[i] in ("--comment", "-c") and i + 1 < len(rest):
+                comment = rest[i + 1]; i += 1
+            else:
+                positional.append(rest[i])
+            i += 1
+        if not positional or len(positional) > 2 or (len(positional) == 1 and not comment):
+            print('Usage: taskana-cli answer <question_id> [<option_key>] [--comment "..."]  (key and/or comment)', file=sys.stderr)
+            sys.exit(1)
+        cmd_answer(token, positional[0], positional[1] if len(positional) > 1 else None, comment)
+    elif cmd == "withdraw":
+        if len(args) < 2:
+            print("Usage: taskana-cli withdraw <question_id>", file=sys.stderr)
+            sys.exit(1)
+        cmd_withdraw(token, args[1])
     elif cmd in ("search", "find"):
         if len(args) < 2:
             print("Usage: taskana-cli search <query>", file=sys.stderr)
