@@ -27,7 +27,7 @@ VERSION                     ← Version file (used by auto-update)
 
 ## Key differences from skill.asana-tasks
 
-- Hardcoded base URL: `https://taskana.tgai.app/api/1.0`
+- Default base URL: `https://taskana.papabuba.ru/api/1.0` (the only server; no config -> still papabuba, stderr says so; `project-create` without config requires `--base-url`)
 - Token: `~/.config/taskana/token` (not asana)
 - Config: `.claude-team/taskana.json` (not asana.json)
 - CLI binary: `taskana-cli` (not asana-cli)
@@ -68,11 +68,12 @@ VERSION                     ← Version file (used by auto-update)
 - `init-write` refuses to overwrite multi-target config
 - `--target all` blocked for ID-dependent commands (IDs differ between backends)
 - Per-target token takes priority over default token
+- Without project config: token order `tokens/personal` -> `token` -> `TASKANA_TOKEN`; write commands (`project-create`) refuse unless `--base-url` is given
 - Rich text: no `<br>`, no `<p>`, use `\n` for line breaks, `<body>` wrapper required
 
 ## Taskana API specifics
 
-Taskana (https://taskana.tgai.app) — Asana-compatible API at `/api/1.0/`.
+Taskana (https://taskana.papabuba.ru) — Asana-compatible API at `/api/1.0/`.
 
 - `section: null` in memberships for tasks without section (CLI handles via `get_task_section()`)
 - No pagination on compat API (use `limit` param on `/projects/:gid/tasks`)

@@ -7,6 +7,11 @@ Reads config from:
   2. ~/.config/taskana/token    (personal access token)
   3. TASKANA_TOKEN env var      (fallback)
 
+Without a project config (.claude-team/taskana.json) the CLI talks to the default server
+(https://taskana.papabuba.ru/api/1.0), takes the token from tokens/personal -> token ->
+TASKANA_TOKEN and prints the server to stderr. Write commands (project-create) refuse
+in that mode unless --base-url <url> is given explicitly.
+
 Usage:
 
   Setup:
@@ -138,6 +143,8 @@ Global flags:
   --target <name>               Use specific target (from taskana.json targets)
   --target all                  Execute on all targets (dual write)
   --project <gid>               Override projectId (work with a different project)
+  --base-url <url>              Explicit server (API base) for commands without project config;
+                                required for project-create when there is no .claude-team/taskana.json
 """
 
 import json
@@ -148,8 +155,8 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
-VERSION = "1.4.0"
-DEFAULT_BASE_URL = "https://taskana.tgai.app/api/1.0"
+VERSION = "1.4.1"
+DEFAULT_BASE_URL = "https://taskana.papabuba.ru/api/1.0"
 
 
 def find_project_root():
@@ -236,6 +243,18 @@ def load_token(target_name=None):
         return token.strip()
 
     return None
+
+
+def load_token_noconfig():
+    """Token for commands run without a project config: tokens/personal -> token -> TASKANA_TOKEN."""
+    config_dir = Path.home() / ".config" / "taskana"
+    for path in (config_dir / "tokens" / "personal", config_dir / "token"):
+        if path.exists():
+            value = path.read_text().strip()
+            if value:
+                return value
+    token = os.environ.get("TASKANA_TOKEN")
+    return token.strip() if token else None
 
 
 ACTIVE_BASE_URL = DEFAULT_BASE_URL
@@ -2013,6 +2032,11 @@ def run_for_targets(target_name, fn):
         fn(tgt_config)
 
 
+# Commands that run without .claude-team/taskana.json (server = default or --base-url)
+NOCONFIG_COMMANDS = {"whoami", "workspaces", "projects", "users", "project-create", "init"}
+NOCONFIG_WRITE_COMMANDS = {"project-create"}
+
+
 def main():
     args = sys.argv[1:]
 
@@ -2025,6 +2049,7 @@ def main():
     # Extract global flags before command parsing
     target_name = None
     project_override = None
+    base_url_override = None
     filtered_args = []
     i = 0
     while i < len(args):
@@ -2034,6 +2059,9 @@ def main():
         elif args[i] == "--project":
             i += 1
             project_override = args[i] if i < len(args) else None
+        elif args[i] == "--base-url":
+            i += 1
+            base_url_override = args[i].rstrip("/") if i < len(args) else None
         else:
             filtered_args.append(args[i])
         i += 1
@@ -2081,27 +2109,46 @@ def main():
         cmd_dismiss_multitarget()
         return
 
-    # Resolve effective target name from config default if not specified
-    effective_target = target_name
-    if not effective_target:
-        raw = load_raw_config()
-        if raw and "targets" in raw:
-            effective_target = raw.get("default", next(iter(raw["targets"])))
+    # Without a project config: never guess the server silently.
+    no_config = load_raw_config() is None
+    token = None
+    if no_config and args[0] in NOCONFIG_COMMANDS:
+        if args[0] in NOCONFIG_WRITE_COMMANDS and not base_url_override:
+            print(f"ERROR: '{args[0]}' is a write command and there is no .claude-team/taskana.json here.", file=sys.stderr)
+            print(f"Refusing to guess the server. Pass it explicitly: --base-url {DEFAULT_BASE_URL}", file=sys.stderr)
+            sys.exit(1)
+        ACTIVE_BASE_URL = base_url_override or DEFAULT_BASE_URL
+        token = load_token_noconfig()
+        if not token:
+            print("No Taskana token found (looked in ~/.config/taskana/tokens/personal, ~/.config/taskana/token, TASKANA_TOKEN).", file=sys.stderr)
+            print("Run: taskana-cli auth <token> --target personal", file=sys.stderr)
+            sys.exit(1)
+        print(f"[taskana] no project config; server: {ACTIVE_BASE_URL}", file=sys.stderr)
 
-    # Load token (per-target if specified)
-    token = load_token(effective_target)
-    if not token:
-        print("No Taskana token found.")
-        print("Run: taskana-cli auth <token>")
-        print("Get a token at: Taskana → Settings → API Tokens")
-        sys.exit(1)
+    else:
+        # Resolve effective target name from config default if not specified
+        effective_target = target_name
+        if not effective_target:
+            raw = load_raw_config()
+            if raw and "targets" in raw:
+                effective_target = raw.get("default", next(iter(raw["targets"])))
 
-    # Resolve base URL for pre-config commands (from --target or config default)
-    raw_pre = load_raw_config()
-    if raw_pre and "targets" in raw_pre:
-        resolve_name = target_name if (target_name and target_name != "all") else raw_pre.get("default", next(iter(raw_pre["targets"])))
-        if resolve_name in raw_pre["targets"]:
-            ACTIVE_BASE_URL = raw_pre["targets"][resolve_name].get("baseUrl", DEFAULT_BASE_URL)
+        # Load token (per-target if specified)
+        token = load_token(effective_target)
+        if not token:
+            print("No Taskana token found.")
+            print("Run: taskana-cli auth <token>")
+            print("Get a token at: Taskana → Settings → API Tokens")
+            sys.exit(1)
+
+        # Resolve base URL for pre-config commands (from --target or config default)
+        raw_pre = load_raw_config()
+        if raw_pre and "targets" in raw_pre:
+            resolve_name = target_name if (target_name and target_name != "all") else raw_pre.get("default", next(iter(raw_pre["targets"])))
+            if resolve_name in raw_pre["targets"]:
+                ACTIVE_BASE_URL = raw_pre["targets"][resolve_name].get("baseUrl", DEFAULT_BASE_URL)
+        if base_url_override:
+            ACTIVE_BASE_URL = base_url_override
 
     # Commands that need token but NOT project config
     if args[0] == "whoami":
