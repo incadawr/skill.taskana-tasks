@@ -40,7 +40,9 @@ Usage:
         --watch <user>                           Add watcher (repeatable)
     taskana-cli done <id>                        Mark completed + move to Done
     taskana-cli start <id>                       Assign to me + move to In Progress + clear the resume flag
-    taskana-cli move <id> <section>              Move task to section
+    taskana-cli move <id> [<section>] [--top | --bottom | --before <id> | --after <id>]
+                                                 Move to section and/or reorder inside it (column order = priority:
+                                                 top of Next = most important). Section optional when only reordering
     taskana-cli assign <id> <user>               Assign ("me", name, or email)
     taskana-cli unassign <id>                    Remove assignee
     taskana-cli due <id> <date>                  Set due date (YYYY-MM-DD or "clear")
@@ -155,7 +157,7 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
-VERSION = "1.4.2"
+VERSION = "1.4.3"
 DEFAULT_BASE_URL = "https://taskana.papabuba.ru/api/1.0"
 
 
@@ -470,11 +472,65 @@ def cmd_start(token, config, task_id):
         print("Resume flag cleared")
 
 
-def cmd_move(token, config, task_id, section_name):
+def cmd_move(token, config, task_id, section_name=None, top=False, bottom=False,
+             before=None, after=None):
     project_id = config["projectId"]
-    section = find_section(token, project_id, section_name)
-    api("POST", f"/sections/{section['gid']}/addTask", token, {"data": {"task": task_id}})
-    print(f"Task {task_id} moved to \"{section['name']}\"")
+    placing = top or bottom or before or after
+    if section_name:
+        section = find_section(token, project_id, section_name)
+    else:
+        # Reorder inside the task's current section
+        task = api("GET", f"/tasks/{task_id}?opt_fields=memberships.section.name,memberships.section.gid", token)
+        section = get_task_section(task)
+        if not section.get("gid"):
+            print(f"Task {task_id} is not in any section; specify <section>", file=sys.stderr)
+            sys.exit(1)
+    data = {"task": task_id}
+    if top or bottom:
+        sec_tasks = api("GET", f"/sections/{section['gid']}/tasks?opt_fields=name&limit=500", token) or []
+        others = [t["gid"] for t in sec_tasks if str(t["gid"]) != str(task_id)]
+        if others:
+            if top:
+                data["insert_before"] = others[0]
+            else:
+                data["insert_after"] = others[-1]
+        # empty column: plain move is enough
+    elif before:
+        data["insert_before"] = before
+    elif after:
+        data["insert_after"] = after
+
+    path = f"/sections/{section['gid']}/addTask"
+    if "insert_before" not in data and "insert_after" not in data:
+        api("POST", path, token, {"data": data})
+    else:
+        req_body = json.dumps({"data": data}).encode()
+        req = urllib.request.Request(
+            f"{ACTIVE_BASE_URL}{path}", data=req_body, method="POST",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req) as resp:
+                resp.read()
+        except urllib.error.HTTPError as e:
+            body = e.read().decode()
+            try:
+                msg = json.loads(body).get("errors", [{}])[0].get("message", body)
+            except (json.JSONDecodeError, IndexError, KeyError, AttributeError):
+                msg = body
+            if e.code == 400 and ("insert_" in msg.lower() or "unknown" in msg.lower() or "additional" in msg.lower()):
+                print("ERROR: this server does not support ordering (insert_before/insert_after); "
+                      "update Taskana to a version with task ordering.", file=sys.stderr)
+            else:
+                print(f"API Error ({e.code}): {msg}", file=sys.stderr)
+            sys.exit(1)
+        except urllib.error.URLError as e:
+            print(f"Network Error: {e.reason}", file=sys.stderr)
+            sys.exit(1)
+    if placing:
+        where = "at the top of" if top else "at the bottom of" if bottom else f"before {before} in" if before else f"after {after} in"
+        print(f"Task {task_id} placed {where} \"{section['name']}\"")
+    else:
+        print(f"Task {task_id} moved to \"{section['name']}\"")
 
 
 def cmd_create(token, config, name, section_name=None, notes=None, due=None,
@@ -2297,10 +2353,31 @@ def _run_command(cmd, args, token, config):
             sys.exit(1)
         cmd_start(token, config, args[1])
     elif cmd == "move":
-        if len(args) < 3:
-            print("Usage: taskana-cli move <task_id> <section>", file=sys.stderr)
+        rest = args[2:]
+        top = bottom = False
+        before = after = None
+        names = []
+        i = 0
+        while i < len(rest):
+            if rest[i] == "--top":
+                top = True
+            elif rest[i] == "--bottom":
+                bottom = True
+            elif rest[i] == "--before" and i + 1 < len(rest):
+                before = rest[i + 1]
+                i += 1
+            elif rest[i] == "--after" and i + 1 < len(rest):
+                after = rest[i + 1]
+                i += 1
+            else:
+                names.append(rest[i])
+            i += 1
+        modes = [top, bottom, bool(before), bool(after)]
+        usage = "Usage: taskana-cli move <task_id> [<section>] [--top | --bottom | --before <id> | --after <id>]"
+        if len(args) < 2 or sum(modes) > 1 or (not names and sum(modes) == 0):
+            print(usage, file=sys.stderr)
             sys.exit(1)
-        cmd_move(token, config, args[1], " ".join(args[2:]))
+        cmd_move(token, config, args[1], " ".join(names) or None, top, bottom, before, after)
     elif cmd in ("create", "add"):
         if len(args) < 2:
             print("Usage: taskana-cli create <name> [--section X] [--notes X] [--due X] [--assign X] [--watch X]", file=sys.stderr)

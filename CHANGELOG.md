@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.4.3 (2026-10-05)
+- `move <id> [<section>] [--top | --bottom | --before <id> | --after <id>]`: order tasks inside a column (priority = order,
+  top of Next = most important); section optional when only reordering; uses `insert_before` / `insert_after` of addTask
+- Skill: rule "take from the top of Next; urgent new task -> `move <id> Next --top`; don't reorder the owner's order without reason"
+
 ## 1.4.2 (2026-10-05)
 - Skill: review cards (`submit`) are written for the owner - in Russian, 1-3 plain checks with expected result, internal details
   go to `--how`; "nothing to look at, verified by me" cards are explicit
