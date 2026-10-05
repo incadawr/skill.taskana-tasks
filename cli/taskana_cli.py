@@ -155,7 +155,7 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
-VERSION = "1.4.1"
+VERSION = "1.4.2"
 DEFAULT_BASE_URL = "https://taskana.papabuba.ru/api/1.0"
 
 
@@ -2135,6 +2135,10 @@ def main():
 
         # Load token (per-target if specified)
         token = load_token(effective_target)
+        if not token and no_config:
+            print("No .claude-team/taskana.json found in current or parent directories.", file=sys.stderr)
+            print("This folder is not bound to a Taskana project (a git worktree? copy .claude-team/taskana.json from the main checkout).", file=sys.stderr)
+            sys.exit(1)
         if not token:
             print("No Taskana token found.")
             print("Run: taskana-cli auth <token>")

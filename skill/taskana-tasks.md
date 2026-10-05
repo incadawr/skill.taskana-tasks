@@ -187,14 +187,20 @@ or returns it with one click.
 
 ```bash
 taskana-cli submit <task_id> \
-    --check "Open /settings, the new toggle is visible" --check "Toggle persists after reload" \
-    --how "docker compose up -d --build; open http://localhost:5173/settings" \
+    --check "Настройки → новый переключатель «Тёмная тема» виден" --check "После перезагрузки страницы он остаётся включённым" \
+    --how "Стенд: http://localhost:5173 (docker compose up -d --build), вход test@taskana.test / testtest. Проверено мной: unit-тесты 42/42" \
     --branch feature/123-toggle --commits a1b2c3,d4e5f6 --minutes 10 \
     --agent "claude · <session label>"
 ```
 
-- `--check` (repeatable): concrete things the owner should verify, one action + expected result each.
-- `--how`: exact steps to run it locally (commands, URLs, test accounts, caveats).
+**The card is read by the owner, not by a developer.** Write it in Russian (the owner's language), from the owner's point of view:
+- `--check` (repeatable, 1-3 items): what the owner does with their hands/eyes and what they should see - one action + expected
+  result each, in plain words. No source paths, CLI flags or grep commands when they can be avoided. The first check may say what
+  changed for the owner in 1-2 phrases ("Теперь …").
+- If there is nothing for the owner to look at (internal/CLI/infra change you already verified), say so plainly:
+  `--check "Смотреть нечего: проверено мной - <что именно>. Достаточно принять"`, and `--minutes 1`.
+- `--how`: where to look (stand URL, test account, device) plus how YOU verified it (tests, commands, branch details). Internal
+  details go here, not into `--check`.
 - `--minutes`: the **owner's** time to accept (not yours); the inbox sums it so the owner can plan "I have 90 minutes".
 - `--branch` / `--commits`: where the code is (comma separated commits). Submitting again replaces a pending card (new round).
 - Do NOT also write a free-form `ПРИЕМКА:` comment - `submit` posts one automatically.

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.4.2 (2026-10-05)
+- Skill: review cards (`submit`) are written for the owner - in Russian, 1-3 plain checks with expected result, internal details
+  go to `--how`; "nothing to look at, verified by me" cards are explicit
+- No project config + no token: say "folder is not bound to a Taskana project" (worktree hint) instead of "No Taskana token found"
+
 ## 1.4.1 (2026-10-05)
 - Drop the old server (taskana.tgai.app): DEFAULT_BASE_URL is now https://taskana.papabuba.ru/api/1.0
 - No project config (.claude-team/taskana.json): whoami/workspaces/projects/users/init use the default server,
