@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.1 (2026-10-05)
+- Drop the old server (taskana.tgai.app): DEFAULT_BASE_URL is now https://taskana.papabuba.ru/api/1.0
+- No project config (.claude-team/taskana.json): whoami/workspaces/projects/users/init use the default server,
+  token order tokens/personal -> token -> TASKANA_TOKEN, and print the server to stderr
+- `project-create` without a project config refuses unless `--base-url <url>` is passed explicitly (new global flag)
+
 ## 1.4.0 (2026-10-04)
 - Add structured review: `submit <id> --check ... --how ... [--branch] [--commits] [--minutes]` (moves to Review),
   `reviews [--returned] [--all]`, `accept <id> [--comment]`, `return <id> --comment`

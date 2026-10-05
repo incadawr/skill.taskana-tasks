@@ -354,7 +354,7 @@ Global flags:
 ## Important
 
 - Always use the CLI tool, not raw curl, for Taskana operations.
-- The CLI reads `.claude-team/taskana.json` from the project and `~/.config/taskana/token` for auth.
+- The CLI reads `.claude-team/taskana.json` from the project and `~/.config/taskana/token` for auth (without a project config: `tokens/personal` -> `token` -> `TASKANA_TOKEN`, default server taskana.papabuba.ru; `project-create` needs `--base-url`).
 - Task IDs are Taskana GIDs (numbers).
 - `start` auto-assigns the task to the current developer.
 - Do NOT create config files for the user during init — use `taskana-cli init-write` instead.
