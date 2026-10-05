@@ -103,6 +103,12 @@ taskana-cli board           # then the whole roadmap
 `taskana-cli start <id>` - running it assigns the task to you, moves it to In Progress and **clears the resume flag**
 (other sessions then stop seeing it). `resume --all` covers every project of the workspace.
 
+## Priority = order in the column
+
+**Next is ordered by priority: take the task from the top** (`board` / `list` print tasks in column order). Put a genuinely
+urgent new task at the top with `taskana-cli move <id> Next --top`. Don't reorder the owner's order without reason.
+Reorder with `move <id> [<section>] [--top | --bottom | --before <id> | --after <id>]` (section optional when staying in it).
+
 ## Default workflow
 
 ### When developer asks "what to work on?" or similar:
@@ -270,7 +276,8 @@ Tasks:
       --watch <user>                           Add watcher (repeatable)
   taskana-cli done <id>                        Complete + move to Done
   taskana-cli start <id>                       Assign to me + In Progress
-  taskana-cli move <id> <section>              Move to section
+  taskana-cli move <id> [<section>] [--top|--bottom|--before <id>|--after <id>]
+                                               Move to section / reorder inside the column (order = priority)
   taskana-cli assign <id> <user>               Assign ("me", name, email)
   taskana-cli unassign <id>                    Remove assignee
   taskana-cli due <id> <date>                  Set due date (YYYY-MM-DD / "clear")
