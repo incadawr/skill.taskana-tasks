@@ -183,6 +183,11 @@ def load_raw_config():
         return json.load(f)
 
 
+def _top_level_opts(raw_config):
+    """Top-level options of a multi-target config inherited by every target (reviewLimit)."""
+    return {k: raw_config[k] for k in ("reviewLimit",) if k in raw_config}
+
+
 def resolve_targets(raw_config, target_name=None):
     """Resolve config into list of (name, config) tuples based on target selection.
 
@@ -207,7 +212,7 @@ def resolve_targets(raw_config, target_name=None):
     default = raw_config.get("default", next(iter(targets)))
 
     if target_name == "all":
-        return [(name, {**cfg, "baseUrl": cfg.get("baseUrl", DEFAULT_BASE_URL)})
+        return [(name, {**_top_level_opts(raw_config), **cfg, "baseUrl": cfg.get("baseUrl", DEFAULT_BASE_URL)})
                 for name, cfg in targets.items()]
 
     name = target_name or default
@@ -216,7 +221,7 @@ def resolve_targets(raw_config, target_name=None):
         sys.exit(1)
 
     cfg = targets[name]
-    return [(name, {**cfg, "baseUrl": cfg.get("baseUrl", DEFAULT_BASE_URL)})]
+    return [(name, {**_top_level_opts(raw_config), **cfg, "baseUrl": cfg.get("baseUrl", DEFAULT_BASE_URL)})]
 
 
 def load_config(target_name=None):
