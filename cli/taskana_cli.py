@@ -31,13 +31,17 @@ Usage:
     taskana-cli my                               My assigned tasks
     taskana-cli search <query>                   Search tasks by name
     taskana-cli overview                         Dashboard: my + todo + review + in progress
-    taskana-cli board                            Compact board view (grouped by section)
+    taskana-cli board [--milestone <id|current|none>]  Compact board view (grouped by section)
+                                                 (list takes --milestone too; cards show [milestone])
     taskana-cli create <name> [options]          Create task
         --section <name>                         Place in section (default: Backlog)
         --notes <text>                           Task description
         --due <YYYY-MM-DD>                       Due date
         --assign <user>                          Assign ("me", name, or email)
         --watch <user>                           Add watcher (repeatable)
+        --milestone <id|current>                 Put into a milestone (default: none = backlog)
+        --owner-task <minutes>                   Work only the owner can do (keys, accounts, decisions);
+                                                 shows in the owner's inbox with the minutes
     taskana-cli done <id>                        Mark completed + move to Done
     taskana-cli start <id> [--force]             Assign to me + move to In Progress + clear the resume flag
                                                  (refuses when the review limit is reached, unless --force)
@@ -114,7 +118,7 @@ Usage:
     taskana-cli return <task_id> --comment "..."    Return with a required comment (task -> In Progress)
 
   Owner queue and agent resume queue:
-    taskana-cli inbox [--all-projects]           What waits for the owner: open questions + reviews, minutes total
+    taskana-cli inbox [--all-projects]           What waits for the owner: questions, reviews, owner tasks, minutes
                                                  (bound project by default)
     taskana-cli resume [--all]                   Tasks the owner answered / returned that nobody picked up yet,
                                                  with the answers and comments inline. Run FIRST at session start.
@@ -133,6 +137,20 @@ Usage:
     taskana-cli widget move <id> [--x N] [--y N] [--w N] [--h N]  Move/resize (12-column grid)
     taskana-cli widget remove <id>               Remove a widget
     taskana-cli widget data <id>                 Print the computed data of a widget
+
+  Milestones (roadmap) and project status:
+    taskana-cli milestones [--brief]             Project status + roadmap: order, status, progress (* = current)
+    taskana-cli milestone <id>                   Milestone with its goal and tasks
+    taskana-cli milestone-create <name> [--goal "..."] [--done-when "..."] [--target YYYY-MM-DD]
+                  [--before <id> | --after <id>] [--activate]   New milestone (end of the roadmap by default)
+    taskana-cli milestone-edit <id> [--name X] [--goal X] [--done-when X] [--target YYYY-MM-DD|clear]
+    taskana-cli milestone-move <id> --before <id> | --after <id>  Reorder the roadmap
+    taskana-cli milestone-activate <id> [--previous planned|done]  Make current (the former one -> planned)
+    taskana-cli milestone-close <id> [--dropped]  Close as done (or dropped)
+    taskana-cli milestone-set <task_id>... <id|current|none>  Put tasks into a milestone (none = backlog)
+    taskana-cli project-status [--state active|paused|frozen|archived]
+                  [--stage idea|prototype|mvp|beta|released|maintenance|none] [--next "..."]
+                                                 Show / set the project state, stage and next step
 
   Project:
     taskana-cli members                          List project members
@@ -159,7 +177,7 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
-VERSION = "1.4.4"
+VERSION = "1.5.0"
 DEFAULT_BASE_URL = "https://taskana.papabuba.ru/api/1.0"
 
 
@@ -363,10 +381,12 @@ def get_me(token):
 
 # --- Commands ---
 
-def cmd_list(token, config, section_filter=None):
+def cmd_list(token, config, section_filter=None, milestone=None):
     project_id = config["projectId"]
-    fields = "name,completed,assignee.name,memberships.section.name,tags.name"
+    fields = "name,completed,assignee.name,memberships.section.name,tags.name,milestone.name"
     url = f"/projects/{project_id}/tasks?opt_fields={fields}&limit={task_limit()}"
+    if milestone:
+        url += f"&milestone={milestone_param(milestone)}"
 
     section = None
     if section_filter:
@@ -400,7 +420,7 @@ def cmd_list(token, config, section_filter=None):
             done = "✓" if t.get("completed") else " "
             assignee = t.get("assignee", {})
             assignee_name = f"  @{assignee['name']}" if assignee else ""
-            print(f"[{done}] {t['gid']}  {t['name']}{assignee_name}")
+            print(f"[{done}] {t['gid']}  {t['name']}{assignee_name}{milestone_label(t)}")
 
     print(f"\nTotal: {len(tasks)} tasks")
 
@@ -442,6 +462,10 @@ def cmd_show(token, task_id):
     print(f"Assignee: {assignee['name'] if assignee else '-'}")
     tags = ", ".join(tag["name"] for tag in t.get("tags", [])) or "-"
     print(f"Tags: {tags}")
+    m = t.get("milestone")
+    print(f"Milestone: {m['name'] + ' (' + m['gid'] + ')' if m else '- (backlog)'}")
+    if t.get("task_type") == "owner_task":
+        print(f"Type: owner task (~{t.get('owner_minutes') or '?'} min of the owner)")
     if t.get("due_on"):
         print(f"Due: {t['due_on']}")
     print(f"Created: {(t.get('created_at') or '')[:10]}")
@@ -604,7 +628,7 @@ def cmd_move(token, config, task_id, section_name=None, top=False, bottom=False,
 
 
 def cmd_create(token, config, name, section_name=None, notes=None, due=None,
-               assign=None, watch=None):
+               assign=None, watch=None, milestone=None, owner_minutes=None):
     project_id = config["projectId"]
     sections = get_sections(token, project_id)
 
@@ -632,9 +656,17 @@ def cmd_create(token, config, name, section_name=None, notes=None, due=None,
         body["data"]["assignee"] = user["gid"]
     if section_gid:
         body["data"]["memberships"] = [{"project": project_id, "section": section_gid}]
+    if milestone:
+        v = milestone_param(milestone)
+        if v != "none":
+            body["data"]["milestone"] = v
+    if owner_minutes is not None:
+        body["data"]["task_type"] = "owner_task"
+        body["data"]["owner_minutes"] = owner_minutes
 
     task = api("POST", "/tasks", token, body)
-    print(f"Created: {task['gid']}  {task['name']}")
+    print(f"Created: {task['gid']}  {task['name']}{milestone_label(task)}"
+          + ("  (owner task)" if owner_minutes is not None else ""))
 
     if watch:
         for w in watch:
@@ -1049,6 +1081,7 @@ def cmd_inbox(token, config, all_projects=False):
     for g in inbox["projects"]:
         pname = g["project"]["name"]
         print(f"== {pname}: {g['questions']} questions, {g['reviews']} reviews"
+              + (f", {g['owner_tasks']} owner tasks" if g.get("owner_tasks") else "")
               + (f", ~{g['minutes']} min" if g["minutes"] else ""))
         for q in inbox["questions"]:
             if q["project"]["gid"] == g["project"]["gid"]:
@@ -1056,10 +1089,16 @@ def cmd_inbox(token, config, all_projects=False):
         for r in inbox["reviews"]:
             if r["project"]["gid"] == g["project"]["gid"]:
                 print("  " + format_review(r, detail=False).replace("\n", "\n  "))
+        for o in inbox.get("owner_tasks") or []:
+            if o["project"]["gid"] == g["project"]["gid"]:
+                mins = f"  ~{o['owner_minutes']} min" if o.get("owner_minutes") else ""
+                ms = f"  [{o['milestone']['name']}]" if o.get("milestone") else ""
+                print(f"  owner task {o['task']['gid']}  {o['task']['name']}{mins}{ms}")
         print()
     extra = f" ({totals['unestimated']} reviews without an estimate)" if totals.get("unestimated") else ""
-    print(f"Total: {totals['questions']} questions, {totals['reviews']} reviews, "
-          f"~{totals['minutes']} min of acceptance{extra}{lim}")
+    owner = f", {totals['owner_tasks']} owner tasks" if totals.get("owner_tasks") else ""
+    print(f"Total: {totals['questions']} questions, {totals['reviews']} reviews{owner}, "
+          f"~{totals['minutes']} min of the owner{extra}{lim}")
     if lim and totals.get("reviews", 0) >= review_limit(config):
         print_review_limit_warning(totals["reviews"], review_limit(config))
 
@@ -1915,11 +1954,14 @@ def cmd_estimate(token, config, task_id, hours):
     print(f"Task {task_id} estimate set to {hours}h")
 
 
-def cmd_board(token, config):
+def cmd_board(token, config, milestone=None):
     project_id = config["projectId"]
     sections = get_sections(token, project_id)
-    fields = "name,completed,assignee.name,due_on"
-    tasks = api("GET", f"/projects/{project_id}/tasks?opt_fields={fields},memberships.section.gid&limit={task_limit()}", token)
+    fields = "name,completed,assignee.name,due_on,milestone.name"
+    url = f"/projects/{project_id}/tasks?opt_fields={fields},memberships.section.gid&limit={task_limit()}"
+    if milestone:
+        url += f"&milestone={milestone_param(milestone)}"
+    tasks = api("GET", url, token)
 
     for sec in sections:
         sec_tasks = [t for t in tasks
@@ -1937,8 +1979,181 @@ def cmd_board(token, config):
             if t.get("due_on"):
                 parts.append(t["due_on"])
             extra = f"  ({', '.join(parts)})" if parts else ""
-            print(f"│ [{done}] {t['name']}{extra}")
+            print(f"│ [{done}] {t['gid']}  {t['name']}{extra}{milestone_label(t)}")
         print("└─")
+
+
+# --- Milestones (roadmap) and project status ---
+
+MILESTONE_MARK = {"active": "*", "planned": " ", "done": "✓", "dropped": "x"}
+
+
+def milestone_label(t):
+    """' [R2 · First testers]' for a task in a milestone, '' for backlog."""
+    m = t.get("milestone")
+    if not m:
+        return ""
+    name = m.get("name") or m.get("gid")
+    return f"  [{name if len(name) <= 28 else name[:27] + '…'}]"
+
+
+def milestone_param(value):
+    """--milestone value -> query/body value: gid | 'current' | 'none'."""
+    v = (value or "").strip().lower()
+    if v in ("current", "none"):
+        return v
+    if not v.isdigit():
+        print(f'--milestone expects a milestone id, "current" or "none", got "{value}"', file=sys.stderr)
+        sys.exit(1)
+    return v
+
+
+def format_milestone(m, detail=True):
+    mark = MILESTONE_MARK.get(m.get("status"), " ")
+    total, done = m.get("tasks_total") or 0, m.get("tasks_done") or 0
+    line = f"{mark} {m['gid']}  {m['name']}  [{m.get('status')}]  {done}/{total}"
+    if m.get("target_date"):
+        line += f"  (target {m['target_date'][:10]})"
+    if detail:
+        if m.get("goal"):
+            line += f"\n      goal: {m['goal']}"
+        if m.get("done_when"):
+            line += f"\n      done when: {m['done_when']}"
+    return line
+
+
+def print_project_status(p):
+    cur = p.get("current_milestone")
+    print(f"Project: {p['name']} ({p['gid']})")
+    print(f"State: {p.get('state') or 'active'}   Stage: {p.get('stage') or '-'}")
+    if cur:
+        print(f"Current milestone: {cur['gid']}  {cur.get('name')}  {cur.get('tasks_done') or 0}/{cur.get('tasks_total') or 0}")
+    else:
+        print("Current milestone: - (not set)")
+    print(f"Next: {p.get('next_step') or '-'}")
+
+
+def cmd_milestones(token, config, brief=False):
+    project_id = config["projectId"]
+    p = api("GET", f"/projects/{project_id}", token)
+    print_project_status(p)
+    ms = api("GET", f"/projects/{project_id}/milestones", token)
+    print()
+    if not ms:
+        print("No milestones yet. Create one: taskana-cli milestone-create <name> --goal \"...\" --done-when \"...\"")
+        return
+    for m in ms:
+        print(format_milestone(m, detail=not brief))
+    print("\n(* current, ✓ done, x dropped; order = roadmap)")
+
+
+def cmd_milestone_show(token, milestone_id):
+    m = api("GET", f"/milestones/{milestone_id}", token)
+    print(format_milestone(m))
+    if m.get("closed_at"):
+        print(f"  closed: {m['closed_at'][:10]}")
+    tasks = api("GET", f"/projects/{m['project']['gid']}/tasks?milestone={m['gid']}&limit={task_limit()}", token)
+    for t in tasks:
+        if t.get("parent"):
+            continue
+        done = "✓" if t.get("completed") else " "
+        sec = get_task_section(t).get("name", "")
+        print(f"  [{done}] {t['gid']}  {t['name']}  ({sec})")
+
+
+def milestone_body(name=None, goal=None, done_when=None, target=None):
+    data = {}
+    if name is not None:
+        data["name"] = name
+    if goal is not None:
+        data["goal"] = goal or None
+    if done_when is not None:
+        data["done_when"] = done_when or None
+    if target is not None:
+        data["target_date"] = None if target in ("", "clear") else target
+    return data
+
+
+def cmd_milestone_create(token, config, name, goal=None, done_when=None, target=None,
+                         before=None, after=None, activate=False):
+    data = milestone_body(name, goal, done_when, target)
+    if before:
+        data["before_milestone"] = before
+    if after:
+        data["after_milestone"] = after
+    m = api("POST", f"/projects/{config['projectId']}/milestones", token, {"data": data})
+    print(f"Created milestone: {m['gid']}  {m['name']}")
+    if activate:
+        api("POST", f"/milestones/{m['gid']}/activate", token, {"data": {}})
+        print("  made current")
+
+
+def cmd_milestone_edit(token, milestone_id, **fields):
+    data = milestone_body(**fields)
+    if not data:
+        print("Nothing to change: pass --name, --goal, --done-when or --target", file=sys.stderr)
+        sys.exit(1)
+    m = api("PUT", f"/milestones/{milestone_id}", token, {"data": data})
+    print(f"Updated milestone: {m['gid']}  {m['name']}")
+
+
+def cmd_milestone_move(token, config, milestone_id, before=None, after=None):
+    data = {"milestone": milestone_id}
+    if before:
+        data["before_milestone"] = before
+    else:
+        data["after_milestone"] = after
+    api("POST", f"/projects/{config['projectId']}/milestones/insert", token, {"data": data})
+    print(f"Milestone {milestone_id} placed {'before ' + before if before else 'after ' + after}")
+
+
+def cmd_milestone_activate(token, milestone_id, previous=None):
+    data = {"previous": previous} if previous else {}
+    m = api("POST", f"/milestones/{milestone_id}/activate", token, {"data": data})
+    print(f"Current milestone: {m['gid']}  {m['name']}"
+          + (f" (the former one -> {previous})" if previous else ""))
+
+
+def cmd_milestone_close(token, milestone_id, dropped=False):
+    m = api("POST", f"/milestones/{milestone_id}/close", token,
+            {"data": {"status": "dropped" if dropped else "done"}})
+    print(f"Milestone {m['gid']}  {m['name']} -> {m.get('status')}")
+    left = (m.get("tasks_total") or 0) - (m.get("tasks_done") or 0)
+    if left and not dropped:
+        print(f"  note: {left} open task(s) stay in it; move them: taskana-cli milestone-set <task_id> <id|current|none>")
+
+
+def cmd_milestone_set(token, task_ids, value):
+    v = milestone_param(value)
+    body_value = None if v == "none" else v
+    for task_id in task_ids:
+        t = api("PUT", f"/tasks/{task_id}", token, {"data": {"milestone": body_value}})
+        m = t.get("milestone")
+        print(f"Task {task_id} -> {m['name'] + ' (' + m['gid'] + ')' if m else 'backlog (no milestone)'}")
+
+
+PROJECT_STATES = ("active", "paused", "frozen", "archived")
+PROJECT_STAGES = ("idea", "prototype", "mvp", "beta", "released", "maintenance")
+
+
+def cmd_project_status(token, config, state=None, stage=None, next_step=None):
+    project_id = config["projectId"]
+    data = {}
+    if state is not None:
+        if state not in PROJECT_STATES:
+            print(f"--state: one of {', '.join(PROJECT_STATES)}", file=sys.stderr)
+            sys.exit(1)
+        data["state"] = state
+    if stage is not None:
+        if stage not in PROJECT_STAGES + ("none",):
+            print(f"--stage: one of {', '.join(PROJECT_STAGES)} or none", file=sys.stderr)
+            sys.exit(1)
+        data["stage"] = None if stage == "none" else stage
+    if next_step is not None:
+        data["next_step"] = next_step or None
+    if data:
+        api("PUT", f"/projects/{project_id}", token, {"data": data})
+    print_project_status(api("GET", f"/projects/{project_id}", token))
 
 
 def cmd_add_target(token, name, base_url, project_gid=None, target_token=None):
@@ -2405,20 +2620,42 @@ def main():
     return
 
 
+def parse_flags(rest, value_flags, bool_flags=()):
+    """Split args into (positional, {flag: value}); value flags take the next arg, bool flags take none."""
+    pos, flags = [], {}
+    i = 0
+    while i < len(rest):
+        a = rest[i]
+        if a in value_flags:
+            if i + 1 >= len(rest):
+                print(f"{a} needs a value", file=sys.stderr)
+                sys.exit(1)
+            flags[a] = rest[i + 1]
+            i += 1
+        elif a in bool_flags:
+            flags[a] = True
+        else:
+            pos.append(a)
+        i += 1
+    return pos, flags
+
+
 def _run_command(cmd, args, token, config):
     """Execute a single command against one target."""
     # Commands that need projectId
     needs_project = {"list", "ls", "my", "overview", "board", "sections",
                      "section-create", "section-rename", "section-delete", "section-move",
                      "members", "search", "find", "create", "add",
-                     "custom-fields", "custom-field-create", "estimate"}
+                     "custom-fields", "custom-field-create", "estimate",
+                     "milestones", "milestone-create", "milestone-move", "project-status"}
     if cmd in needs_project and not config.get("projectId"):
         print(f"ERROR: No projectId configured for this target.", file=sys.stderr)
         print("Run: taskana-cli set-target-project <target> <gid>", file=sys.stderr)
         sys.exit(1)
 
     if cmd in ("list", "ls"):
-        cmd_list(token, config, args[1] if len(args) > 1 else None)
+        pos, fl = parse_flags(args[1:], ("--milestone", "-m"))
+        cmd_list(token, config, " ".join(pos) or None, fl.get("--milestone") or fl.get("-m"))
     elif cmd == "my":
         cmd_my(token, config)
     elif cmd == "show":
@@ -2464,7 +2701,8 @@ def _run_command(cmd, args, token, config):
         cmd_move(token, config, args[1], " ".join(names) or None, top, bottom, before, after)
     elif cmd in ("create", "add"):
         if len(args) < 2:
-            print("Usage: taskana-cli create <name> [--section X] [--notes X] [--due X] [--assign X] [--watch X]", file=sys.stderr)
+            print("Usage: taskana-cli create <name> [--section X] [--notes X] [--due X] [--assign X] [--watch X]"
+                  " [--milestone <id|current>] [--owner-task <minutes>]", file=sys.stderr)
             sys.exit(1)
         name_parts = []
         section = None
@@ -2472,9 +2710,23 @@ def _run_command(cmd, args, token, config):
         due = None
         assign = None
         watch = []
+        milestone = None
+        owner_minutes = None
         i = 1
         while i < len(args):
-            if args[i] in ("--section", "-s"):
+            if args[i] in ("--milestone", "-m"):
+                i += 1
+                milestone = args[i] if i < len(args) else None
+            elif args[i] == "--owner-task":
+                i += 1
+                try:
+                    owner_minutes = int(args[i]) if i < len(args) else None
+                except ValueError:
+                    owner_minutes = None
+                if owner_minutes is None or owner_minutes < 0:
+                    print("--owner-task expects the owner's minutes, e.g. --owner-task 20", file=sys.stderr)
+                    sys.exit(1)
+            elif args[i] in ("--section", "-s"):
                 i += 1
                 section = args[i] if i < len(args) else None
             elif args[i] in ("--notes", "-n"):
@@ -2494,7 +2746,7 @@ def _run_command(cmd, args, token, config):
                 name_parts.append(args[i])
             i += 1
         cmd_create(token, config, " ".join(name_parts), section, notes, due,
-                   assign, watch or None)
+                   assign, watch or None, milestone, owner_minutes)
     elif cmd == "sections":
         cmd_sections(token, config)
     elif cmd == "section-create":
@@ -2810,7 +3062,61 @@ def _run_command(cmd, args, token, config):
     elif cmd == "members":
         cmd_members(token, config)
     elif cmd == "board":
-        cmd_board(token, config)
+        pos, fl = parse_flags(args[1:], ("--milestone", "-m"))
+        cmd_board(token, config, fl.get("--milestone") or fl.get("-m"))
+    elif cmd == "milestones":
+        cmd_milestones(token, config, brief="--brief" in args[1:])
+    elif cmd == "milestone":
+        if len(args) < 2:
+            print("Usage: taskana-cli milestone <milestone_id>", file=sys.stderr)
+            sys.exit(1)
+        cmd_milestone_show(token, args[1])
+    elif cmd in ("milestone-create", "milestone-edit"):
+        pos, fl = parse_flags(args[1:], ("--goal", "--done-when", "--target", "--before", "--after", "--name"),
+                              ("--activate",))
+        if cmd == "milestone-create":
+            if not pos or (fl.get("--before") and fl.get("--after")):
+                print('Usage: taskana-cli milestone-create <name> [--goal "..."] [--done-when "..."] [--target YYYY-MM-DD]'
+                      " [--before <id> | --after <id>] [--activate]", file=sys.stderr)
+                sys.exit(1)
+            cmd_milestone_create(token, config, " ".join(pos), fl.get("--goal"), fl.get("--done-when"),
+                                 fl.get("--target"), fl.get("--before"), fl.get("--after"), fl.get("--activate", False))
+        else:
+            if len(pos) != 1:
+                print('Usage: taskana-cli milestone-edit <id> [--name X] [--goal X] [--done-when X] [--target YYYY-MM-DD|clear]',
+                      file=sys.stderr)
+                sys.exit(1)
+            cmd_milestone_edit(token, pos[0], name=fl.get("--name"), goal=fl.get("--goal"),
+                               done_when=fl.get("--done-when"), target=fl.get("--target"))
+    elif cmd == "milestone-move":
+        pos, fl = parse_flags(args[1:], ("--before", "--after"))
+        if len(pos) != 1 or bool(fl.get("--before")) == bool(fl.get("--after")):
+            print("Usage: taskana-cli milestone-move <id> --before <id> | --after <id>", file=sys.stderr)
+            sys.exit(1)
+        cmd_milestone_move(token, config, pos[0], fl.get("--before"), fl.get("--after"))
+    elif cmd == "milestone-activate":
+        pos, fl = parse_flags(args[1:], ("--previous",))
+        if len(pos) != 1 or fl.get("--previous") not in (None, "planned", "done"):
+            print("Usage: taskana-cli milestone-activate <id> [--previous planned|done]", file=sys.stderr)
+            sys.exit(1)
+        cmd_milestone_activate(token, pos[0], fl.get("--previous"))
+    elif cmd == "milestone-close":
+        pos, fl = parse_flags(args[1:], (), ("--dropped",))
+        if len(pos) != 1:
+            print("Usage: taskana-cli milestone-close <id> [--dropped]", file=sys.stderr)
+            sys.exit(1)
+        cmd_milestone_close(token, pos[0], fl.get("--dropped", False))
+    elif cmd == "milestone-set":
+        if len(args) < 3:
+            print("Usage: taskana-cli milestone-set <task_id> [<task_id> ...] <milestone_id|current|none>", file=sys.stderr)
+            sys.exit(1)
+        cmd_milestone_set(token, args[1:-1], args[-1])
+    elif cmd == "project-status":
+        pos, fl = parse_flags(args[1:], ("--state", "--stage", "--next"))
+        if pos:
+            print('Usage: taskana-cli project-status [--state X] [--stage X|none] [--next "..."]', file=sys.stderr)
+            sys.exit(1)
+        cmd_project_status(token, config, fl.get("--state"), fl.get("--stage"), fl.get("--next"))
     elif cmd == "custom-fields":
         cmd_custom_fields(token, config)
     elif cmd == "custom-field-create":
