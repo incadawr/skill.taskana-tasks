@@ -109,6 +109,27 @@ taskana-cli board           # then the whole roadmap
 urgent new task at the top with `taskana-cli move <id> Next --top`. Don't reorder the owner's order without reason.
 Reorder with `move <id> [<section>] [--top | --bottom | --before <id> | --after <id>]` (section optional when staying in it).
 
+## Milestones (этапы) — the roadmap
+
+A project has an ordered list of milestones (the roadmap) and **one current milestone** = the slice being worked on now
+(10–25 tasks). The backlog is everything without a milestone and never has to be emptied. Project-level fields: state
+(`active|paused|frozen|archived`), stage (`idea|prototype|mvp|beta|released|maintenance`) and a one-line next step.
+
+- **See it:** `taskana-cli milestones` (status + roadmap, `*` = current), `taskana-cli milestone <id>` (goal + tasks).
+- **Take work from the current milestone:** `taskana-cli board --milestone current` — the top of Next among them first. A task in
+  Next outside the current milestone is taken only when the current one has nothing left for an agent, or the owner says so.
+- **New work:** in scope of the current milestone → `create ... --milestone current`; anything else (ideas, found bugs,
+  "later") → plain `create` (backlog, no milestone). Don't widen the current slice silently.
+- **Owner-only work** (keys, accounts, payments, a design decision with no options to pick, a manual test on a device):
+  `create "..." --owner-task <minutes> [--milestone current]` — it goes to the owner's inbox with the minutes. Not for
+  questions (use `ask`) and not for acceptance (use `submit`).
+- **Last task of the current milestone accepted** → ask the owner with `ask`: close it and which milestone is next
+  (options = the next planned ones from `milestones`). Close / activate only on the owner's answer:
+  `milestone-close <id>`, `milestone-activate <id>`.
+- Creating / reordering / editing milestones and `project-status --stage/--state/--next` change the owner's plan — only when
+  the owner asked (e.g. "заведи этапы", migrating a project). Never delete milestones.
+- Stages modelled as parent tasks with subtasks (old Bob Universe / anyworld style) are legacy; new projects use milestones.
+
 ## Review limit (тормоз долга приёмки)
 
 Лимит открытых карточек приёмки на проект: 5 (переопределение — `reviewLimit` в `.claude-team/taskana.json`).
@@ -228,6 +249,9 @@ What waits for the owner overall: `taskana-cli inbox` (bound project) / `taskana
 
 ### Dashboards: assemble a roadmap dashboard for a project
 
+The roadmap itself lives in milestones (see "Milestones" above; the project's «Роадмап» tab in the UI). The dashboard below
+is for projects that still keep stages as parent tasks, or for extra charts.
+
 Works with the normal API token (no web session needed). Widgets compute their data live; the owner sees the dashboard in the
 project's «Dashboard» view. Typical roadmap dashboard (stages = parent tasks R1..R6 with subtasks, columns = sections):
 
@@ -275,13 +299,15 @@ Tasks:
   taskana-cli my                               My assigned tasks
   taskana-cli search <query>                   Search by name
   taskana-cli overview                         Dashboard: my + todo + review + progress
-  taskana-cli board                            Board view (by section)
+  taskana-cli board [--milestone <id|current|none>]  Board view (by section); list takes --milestone too
   taskana-cli create <name> [options]          Create task
       --section <name>                         Section (default: Backlog)
       --notes <text>                           Description
       --due <YYYY-MM-DD>                       Due date
       --assign <user>                          Assign ("me", name, email)
       --watch <user>                           Add watcher (repeatable)
+      --milestone <id|current>                 Into a milestone (default: backlog, no milestone)
+      --owner-task <minutes>                   Owner-only work, shows in the owner's inbox with the minutes
   taskana-cli done <id>                        Complete + move to Done
   taskana-cli start <id>                       Assign to me + In Progress
   taskana-cli move <id> [<section>] [--top|--bottom|--before <id>|--after <id>]
@@ -295,6 +321,17 @@ Tasks:
   taskana-cli comment <id> <text> [--pin]      Add comment (--pin to pin)
   taskana-cli comments <id>                    List comments on task
   taskana-cli history <id>                     Full activity log (all events)
+
+Milestones and project status:
+  taskana-cli milestones [--brief]             Project status + roadmap (* = current), progress done/total
+  taskana-cli milestone <id>                   Milestone: goal, done-when, tasks
+  taskana-cli milestone-create <name> [--goal X] [--done-when X] [--target YYYY-MM-DD] [--before|--after <id>] [--activate]
+  taskana-cli milestone-edit <id> [--name X] [--goal X] [--done-when X] [--target YYYY-MM-DD|clear]
+  taskana-cli milestone-move <id> --before <id> | --after <id>
+  taskana-cli milestone-activate <id> [--previous planned|done]
+  taskana-cli milestone-close <id> [--dropped]
+  taskana-cli milestone-set <task_id>... <id|current|none>
+  taskana-cli project-status [--state X] [--stage X|none] [--next "..."]
 
 Subtasks:
   taskana-cli subtasks <id>                    List subtasks

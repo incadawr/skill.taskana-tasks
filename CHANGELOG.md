@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.5.0 (2026-10-07)
+- Milestones (roadmap; server: Taskana with milestones, task 3765): `milestones [--brief]`, `milestone <id>`,
+  `milestone-create`, `milestone-edit`, `milestone-move`, `milestone-activate [--previous planned|done]`,
+  `milestone-close [--dropped]`, `milestone-set <task_id>... <id|current|none>`
+- `project-status [--state] [--stage] [--next]`: project state, stage and next step
+- `create --milestone <id|current>`, `create --owner-task <minutes>` (owner-only work in the owner's inbox)
+- `list` / `board --milestone <id|current|none>`; cards show `[milestone]`; `board` now prints task ids
+- `show`: milestone and owner-task minutes; `inbox`: owner tasks per project and in the total
+- Skill: section "Milestones" - take work from the current milestone, out-of-scope work goes to the backlog,
+  owner-only work = `--owner-task`, last task of a milestone -> ask the owner what's next
+
 ## 1.4.4 (2026-10-07)
 - Review limit: 5 pending review cards per project (override: `reviewLimit` in `.claude-team/taskana.json`)
 - `overview` / `list next`: WARNING when the bound project's pending reviews >= limit; `start` exits 2 without `--force`, except tasks in the resume queue (answered / returned)
