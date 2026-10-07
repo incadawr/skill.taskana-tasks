@@ -245,7 +245,8 @@ taskana-cli submit <task_id> \
 and it shows in `taskana-cli resume` (also `taskana-cli reviews --returned`). Fix the points, `start` the task, `submit` again.
 
 What waits for the owner overall: `taskana-cli inbox` (bound project) / `taskana-cli inbox --all-projects`; pending reviews:
-`taskana-cli reviews [--all]`.
+`taskana-cli reviews [--all]`. All projects at a glance (stage, current milestone, what waits, next step):
+`taskana-cli portfolio`.
 
 ### Dashboards: assemble a roadmap dashboard for a project
 
@@ -388,6 +389,7 @@ Review / inbox / resume:
   taskana-cli accept <id> [--comment "..."]    Accept (owner): task -> Done
   taskana-cli return <id> --comment "..."      Return (owner): task -> In Progress, comment required
   taskana-cli inbox [--all-projects]           Questions + reviews waiting for the owner, total minutes
+  taskana-cli portfolio [--all]                All projects: stage, current milestone, what waits, next step
   taskana-cli resume [--all]                   Answered/returned tasks nobody picked up yet (answers inline)
   taskana-cli start <id> [--force]             ... also clears the resume flag; exit 2 if the review limit is reached
 

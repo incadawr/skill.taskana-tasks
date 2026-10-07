@@ -119,6 +119,7 @@ Usage:
 
   Owner queue and agent resume queue:
     taskana-cli inbox [--all-projects]           What waits for the owner: questions, reviews, owner tasks, minutes
+    taskana-cli portfolio [--all]                All projects: stage, current milestone, what waits, next step
                                                  (bound project by default)
     taskana-cli resume [--all]                   Tasks the owner answered / returned that nobody picked up yet,
                                                  with the answers and comments inline. Run FIRST at session start.
@@ -177,7 +178,7 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
-VERSION = "1.5.0"
+VERSION = "1.6.0"
 DEFAULT_BASE_URL = "https://taskana.papabuba.ru/api/1.0"
 
 
@@ -1101,6 +1102,65 @@ def cmd_inbox(token, config, all_projects=False):
           f"~{totals['minutes']} min of the owner{extra}{lim}")
     if lim and totals.get("reviews", 0) >= review_limit(config):
         print_review_limit_warning(totals["reviews"], review_limit(config))
+
+
+def ago(iso):
+    from datetime import datetime, timezone
+    if not iso:
+        return "no activity"
+    try:
+        t = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    except ValueError:
+        return iso[:10]
+    mins = int((datetime.now(timezone.utc) - t).total_seconds() // 60)
+    if mins < 60:
+        return f"{max(mins, 0)}m ago"
+    if mins < 60 * 24:
+        return f"{mins // 60}h ago"
+    return f"{mins // (60 * 24)}d ago"
+
+
+def cmd_portfolio(token, config, show_all=False):
+    params = [f"workspace={config['workspaceId']}"] if config.get("workspaceId") else []
+    qs = ("?" + "&".join(params)) if params else ""
+    data = api("GET", f"/portfolio{qs}", token)
+    rows, totals = data["projects"], data["totals"]
+    # Same order as the web portfolio: waiting for you (any state) -> active -> paused -> frozen/archived
+    waiting = [r for r in rows if r["waiting"]["total"]]
+    idle = [r for r in rows if not r["waiting"]["total"]]
+    cold = [r for r in idle if r["state"] in ("frozen", "archived")]
+    groups = [("Waiting for you", waiting),
+              ("Active", [r for r in idle if r not in cold and r["state"] != "paused"]),
+              ("Paused", [r for r in idle if r["state"] == "paused"])]
+    if show_all:
+        groups.append(("Frozen / archived", cold))
+    for title, items in groups:
+        if not items:
+            continue
+        print(f"== {title} ({len(items)})")
+        for r in items:
+            head = f"{r['project']['gid']}  {r['project']['name']}  [{r.get('stage') or '-'}"
+            head += f", {r['state']}]" if r["state"] != "active" else "]"
+            print(f"{head}  {ago(r.get('last_activity_at'))}")
+            ms = r.get("current_milestone")
+            print(f"    milestone: {ms['name']} {ms['tasks_done']}/{ms['tasks_total']}" if ms else "    milestone: - (not set)")
+            w = r["waiting"]
+            if w["total"]:
+                parts = [f"{w['questions']} questions", f"{w['reviews']} reviews"]
+                if w["owner_tasks"]:
+                    parts.append(f"{w['owner_tasks']} owner tasks")
+                line = "    waits: " + ", ".join(parts) + (f", ~{w['minutes']} min" if w["minutes"] else "")
+                print(line)
+            if r.get("over_review_limit"):
+                print(f"    REVIEW LIMIT {r.get('pending_reviews')}/{r['review_limit']} - agents take no new work")
+            print(f"    in progress {r['in_progress']}, open {r['open_tasks']} (backlog {r['backlog_open']})")
+            if r.get("next_step"):
+                print(f"    next: {r['next_step']}")
+        print()
+    if cold and not show_all:
+        print(f"(+{len(cold)} frozen/archived - taskana-cli portfolio --all)")
+    print(f"Projects: {totals['projects']} ({totals['active']} active). Waiting for you: {totals['questions']} questions, "
+          f"{totals['reviews']} reviews, {totals['owner_tasks']} owner tasks, ~{totals['minutes']} min")
 
 
 def cmd_resume(token, config, all_projects=False):
@@ -2938,6 +2998,8 @@ def _run_command(cmd, args, token, config):
             cmd_return(token, positional[0], comment)
     elif cmd == "inbox":
         cmd_inbox(token, config, all_projects="--all-projects" in args[1:] or "--all" in args[1:])
+    elif cmd == "portfolio":
+        cmd_portfolio(token, config, show_all="--all" in args[1:])
     elif cmd == "resume":
         cmd_resume(token, config, all_projects="--all" in args[1:])
     elif cmd in ("search", "find"):
