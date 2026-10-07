@@ -39,7 +39,8 @@ Usage:
         --assign <user>                          Assign ("me", name, or email)
         --watch <user>                           Add watcher (repeatable)
     taskana-cli done <id>                        Mark completed + move to Done
-    taskana-cli start <id>                       Assign to me + move to In Progress + clear the resume flag
+    taskana-cli start <id> [--force]             Assign to me + move to In Progress + clear the resume flag
+                                                 (refuses when the review limit is reached, unless --force)
     taskana-cli move <id> [<section>] [--top | --bottom | --before <id> | --after <id>]
                                                  Move to section and/or reorder inside it (column order = priority:
                                                  top of Next = most important). Section optional when only reordering
@@ -107,7 +108,8 @@ Usage:
                   [--branch X] [--commits a,b] [--minutes N] [--agent <label>]
                                                  Submit for review (task moves to "Review"); --minutes = owner's time
     taskana-cli reviews [--returned] [--all]     Pending reviews of the bound project (--returned: returned to the agent,
-                                                 not yet picked up; --all: whole workspace)
+                                                 not yet picked up; --all: whole workspace). Shows X/limit
+                                                 (limit 5, override: "reviewLimit" in .claude-team/taskana.json)
     taskana-cli accept <task_id> [--comment "..."]  Accept (task -> Done, completed)
     taskana-cli return <task_id> --comment "..."    Return with a required comment (task -> In Progress)
 
@@ -157,7 +159,7 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
-VERSION = "1.4.3"
+VERSION = "1.4.4"
 DEFAULT_BASE_URL = "https://taskana.papabuba.ru/api/1.0"
 
 
@@ -369,6 +371,12 @@ def cmd_list(token, config, section_filter=None):
 
     tasks = api("GET", url, token)
 
+    if section_filter and section_filter.strip().lower() == "next":
+        hit = review_limit_reached(token, config)
+        if hit:
+            print_review_limit_warning(*hit)
+            print()
+
     if section_filter:
         tasks = [t for t in tasks
                  if any(((m or {}).get("section") or {}).get("gid") == section["gid"]
@@ -453,8 +461,53 @@ def cmd_done(token, config, task_id):
     print(f"Task {task_id} marked as done")
 
 
-def cmd_start(token, config, task_id):
+DEFAULT_REVIEW_LIMIT = 5
+
+
+def review_limit(config):
+    """Review limit per project: `reviewLimit` in .claude-team/taskana.json, default 5."""
+    try:
+        v = int(config.get("reviewLimit", DEFAULT_REVIEW_LIMIT))
+        return v if v > 0 else DEFAULT_REVIEW_LIMIT
+    except (TypeError, ValueError):
+        return DEFAULT_REVIEW_LIMIT
+
+
+def pending_review_count(token, config):
+    """Pending (not returned) review cards of the bound project, or None if unknown."""
+    if not config.get("projectId"):
+        return None
+    params = ["status=pending", f"project={config['projectId']}"]
+    if config.get("workspaceId"):
+        params.append(f"workspace={config['workspaceId']}")
+    reviews = api_soft("GET", "/reviews?" + "&".join(params), token)
+    return len(reviews) if isinstance(reviews, list) else None
+
+
+def review_limit_reached(token, config):
+    """Returns (count, limit) if the limit is reached, else None."""
+    count = pending_review_count(token, config)
+    limit = review_limit(config)
+    return (count, limit) if count is not None and count >= limit else None
+
+
+def print_review_limit_warning(count, limit, file=None):
+    print(f"WARNING: Review limit reached: {count}/{limit} cards wait for the owner. "
+          "Don't start new feature work; take work that needs no owner acceptance "
+          "(branch cleanup, tests, docs) or stop and tell the owner. "
+          "Limit: `reviewLimit` in .claude-team/taskana.json.", file=file or sys.stdout)
+
+
+def cmd_start(token, config, task_id, force=False):
     project_id = config["projectId"]
+    hit = review_limit_reached(token, config)
+    if hit:
+        print_review_limit_warning(*hit, file=sys.stderr)
+        if not force:
+            print(f"Task {task_id} NOT started. Use --force to start anyway "
+                  "(e.g. a task returned from review).", file=sys.stderr)
+            sys.exit(2)
+        print("--force: starting anyway", file=sys.stderr)
     me = get_me(token)
 
     # Assign to current user
@@ -937,13 +990,17 @@ def cmd_reviews(token, config, returned=False, all_projects=False):
     if config.get("projectId") and not all_projects:
         params.append(f"project={config['projectId']}")
     reviews = api("GET", "/reviews?" + "&".join(params), token)
+    show_limit = bool(not returned and not all_projects and config.get("projectId"))
+    lim = f" (review limit {len(reviews or [])}/{review_limit(config)})" if show_limit else ""
     if not reviews:
-        print("No returned reviews" if returned else "No pending reviews")
+        print(("No returned reviews" if returned else "No pending reviews") + lim)
         return
     for r in reviews:
         print(format_review(r))
         print()
-    print(f"Total: {len(reviews)}")
+    print(f"Total: {len(reviews)}{lim}")
+    if show_limit and len(reviews) >= review_limit(config):
+        print_review_limit_warning(len(reviews), review_limit(config))
 
 
 def cmd_accept(token, task_id, comment=None):
@@ -966,8 +1023,11 @@ def cmd_inbox(token, config, all_projects=False):
     qs = ("?" + "&".join(params)) if params else ""
     inbox = api("GET", f"/inbox{qs}", token)
     totals = inbox["totals"]
+    lim = ""
+    if config.get("projectId") and not all_projects:
+        lim = f" (review limit {totals.get('reviews', 0)}/{review_limit(config)})"
     if not totals["total"]:
-        print("Inbox is empty - nothing waits for the owner")
+        print("Inbox is empty - nothing waits for the owner" + lim)
         return
     for g in inbox["projects"]:
         pname = g["project"]["name"]
@@ -982,7 +1042,9 @@ def cmd_inbox(token, config, all_projects=False):
         print()
     extra = f" ({totals['unestimated']} reviews without an estimate)" if totals.get("unestimated") else ""
     print(f"Total: {totals['questions']} questions, {totals['reviews']} reviews, "
-          f"~{totals['minutes']} min of acceptance{extra}")
+          f"~{totals['minutes']} min of acceptance{extra}{lim}")
+    if lim and totals.get("reviews", 0) >= review_limit(config):
+        print_review_limit_warning(totals["reviews"], review_limit(config))
 
 
 def cmd_resume(token, config, all_projects=False):
@@ -1131,6 +1193,11 @@ def cmd_overview(token, config):
     if is_taskana():
         url += "&completed=false"
     tasks = api("GET", url, token)
+
+    hit = review_limit_reached(token, config)
+    if hit:
+        print_review_limit_warning(*hit)
+        print()
 
     # Categorize
     my_tasks = []
@@ -2349,9 +2416,9 @@ def _run_command(cmd, args, token, config):
         cmd_done(token, config, args[1])
     elif cmd == "start":
         if len(args) < 2:
-            print("Usage: taskana-cli start <task_id>", file=sys.stderr)
+            print("Usage: taskana-cli start <task_id> [--force]", file=sys.stderr)
             sys.exit(1)
-        cmd_start(token, config, args[1])
+        cmd_start(token, config, args[1], force="--force" in args[2:])
     elif cmd == "move":
         rest = args[2:]
         top = bottom = False

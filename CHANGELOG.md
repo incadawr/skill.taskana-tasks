@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.4.4 (2026-10-07)
+- Review limit: 5 pending review cards per project (override: `reviewLimit` in `.claude-team/taskana.json`)
+- `overview` / `list next`: WARNING when the bound project's pending reviews >= limit; `start` exits 2 without `--force`
+  (check runs before any write)
+- `reviews` / `inbox` show `X/limit` for the bound project
+- Skill: section "Review limit" - don't take new feature work at the limit
+
 ## 1.4.3 (2026-10-05)
 - `move <id> [<section>] [--top | --bottom | --before <id> | --after <id>]`: order tasks inside a column (priority = order,
   top of Next = most important); section optional when only reordering; uses `insert_before` / `insert_after` of addTask

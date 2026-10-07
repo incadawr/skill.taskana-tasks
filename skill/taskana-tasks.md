@@ -109,6 +109,14 @@ taskana-cli board           # then the whole roadmap
 urgent new task at the top with `taskana-cli move <id> Next --top`. Don't reorder the owner's order without reason.
 Reorder with `move <id> [<section>] [--top | --bottom | --before <id> | --after <id>]` (section optional when staying in it).
 
+## Review limit (брэйк долга приёмки)
+
+Лимит открытых карточек приёмки на проект: 5 (переопределение — `reviewLimit` в `.claude-team/taskana.json`).
+`reviews` / `inbox` показывают `X/limit`; `overview` и `list next` печатают `WARNING: Review limit reached`, а `start` без `--force`
+завершается с кодом 2. **При достигнутом лимите не бери новую фичу.** Можно: работу без приёмки владельцем (ревизия веток,
+тесты, доки) или остановиться и сказать владельцу, что приёмка ждёт. `--force` — только для возврата карточки (`resume`)
+или по слову владельца.
+
 ## Default workflow
 
 ### When developer asks "what to work on?" or similar:
@@ -344,7 +352,7 @@ Review / inbox / resume:
   taskana-cli return <id> --comment "..."      Return (owner): task -> In Progress, comment required
   taskana-cli inbox [--all-projects]           Questions + reviews waiting for the owner, total minutes
   taskana-cli resume [--all]                   Answered/returned tasks nobody picked up yet (answers inline)
-  taskana-cli start <id>                       ... also clears the resume flag
+  taskana-cli start <id> [--force]             ... also clears the resume flag; exit 2 if the review limit is reached
 
 Dashboards (API token is enough):
   taskana-cli dashboard list [--all]           Dashboards of the project (--all: workspace)
