@@ -2,7 +2,7 @@
 
 ## 1.4.4 (2026-10-07)
 - Review limit: 5 pending review cards per project (override: `reviewLimit` in `.claude-team/taskana.json`)
-- `overview` / `list next`: WARNING when the bound project's pending reviews >= limit; `start` exits 2 without `--force`
+- `overview` / `list next`: WARNING when the bound project's pending reviews >= limit; `start` exits 2 without `--force`, except tasks in the resume queue (answered / returned)
   (check runs before any write)
 - `reviews` / `inbox` show `X/limit` for the bound project
 - Skill: section "Review limit" - don't take new feature work at the limit

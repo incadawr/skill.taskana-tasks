@@ -503,14 +503,26 @@ def print_review_limit_warning(count, limit, file=None):
           "Limit: `reviewLimit` in .claude-team/taskana.json.", file=file or sys.stdout)
 
 
+def is_resume_ready(token, config, task_id):
+    """True if the task waits in the resume queue (owner answered / returned it)."""
+    params = [f"project={config['projectId']}"]
+    if config.get("workspaceId"):
+        params.append(f"workspace={config['workspaceId']}")
+    items = api_soft("GET", "/resume?" + "&".join(params), token)
+    return any(str((it.get("task") or {}).get("gid")) == str(task_id) for it in (items or []))
+
+
 def cmd_start(token, config, task_id, force=False):
     project_id = config["projectId"]
     hit = review_limit_reached(token, config)
-    if hit:
+    if hit and not force and is_resume_ready(token, config, task_id):
+        # Owner answered a question or returned a review: finishing it reduces the debt
+        print(f"Review limit {hit[0]}/{hit[1]} reached, but task {task_id} is in the resume "
+              "queue (answered / returned) - starting.", file=sys.stderr)
+    elif hit:
         print_review_limit_warning(*hit, file=sys.stderr)
         if not force:
-            print(f"Task {task_id} NOT started. Use --force to start anyway "
-                  "(e.g. a task returned from review).", file=sys.stderr)
+            print(f"Task {task_id} NOT started. Use --force to start anyway.", file=sys.stderr)
             sys.exit(2)
         print("--force: starting anyway", file=sys.stderr)
     me = get_me(token)

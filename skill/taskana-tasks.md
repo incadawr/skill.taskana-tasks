@@ -109,13 +109,13 @@ taskana-cli board           # then the whole roadmap
 urgent new task at the top with `taskana-cli move <id> Next --top`. Don't reorder the owner's order without reason.
 Reorder with `move <id> [<section>] [--top | --bottom | --before <id> | --after <id>]` (section optional when staying in it).
 
-## Review limit (брэйк долга приёмки)
+## Review limit (тормоз долга приёмки)
 
 Лимит открытых карточек приёмки на проект: 5 (переопределение — `reviewLimit` в `.claude-team/taskana.json`).
 `reviews` / `inbox` показывают `X/limit`; `overview` и `list next` печатают `WARNING: Review limit reached`, а `start` без `--force`
 завершается с кодом 2. **При достигнутом лимите не бери новую фичу.** Можно: работу без приёмки владельцем (ревизия веток,
-тесты, доки) или остановиться и сказать владельцу, что приёмка ждёт. `--force` — только для возврата карточки (`resume`)
-или по слову владельца.
+тесты, доки) или остановиться и сказать владельцу, что приёмка ждёт. Задачи из `resume` (владелец ответил или вернул
+карточку) `start` пускает и при лимите — их доделка сокращает долг. `--force` — только по слову владельца.
 
 ## Default workflow
 
