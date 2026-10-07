@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.6.0 (2026-10-07)
+- `portfolio [--all]`: all projects of the workspace - stage/state, current milestone and progress, what waits
+  for the owner (questions / reviews / owner tasks, minutes, review limit), in progress, next step, last activity
+  (server: Taskana portfolio, task 3762). Frozen/archived are hidden without `--all`
+
 ## 1.5.0 (2026-10-07)
 - Milestones (roadmap; server: Taskana with milestones, task 3765): `milestones [--brief]`, `milestone <id>`,
   `milestone-create`, `milestone-edit`, `milestone-move`, `milestone-activate [--previous planned|done]`,
