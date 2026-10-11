@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6.1 (2026-10-11)
+- `status`: understands multi-target configs (`targets`/`default`, `--target`) - shows target, server,
+  projectId/workspaceId and checks the per-target token instead of reporting NOT FOUND
+
 ## 1.6.0 (2026-10-07)
 - `portfolio [--all]`: all projects of the workspace - stage/state, current milestone and progress, what waits
   for the owner (questions / reviews / owner tasks, minutes, review limit), in progress, next step, last activity
