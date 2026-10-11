@@ -178,7 +178,7 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
-VERSION = "1.6.0"
+VERSION = "1.6.1"
 DEFAULT_BASE_URL = "https://taskana.papabuba.ru/api/1.0"
 
 
@@ -1529,10 +1529,21 @@ def cmd_init_write(workspace_gid, project_gid):
     print(json.dumps(config, indent=2))
 
 
-def cmd_status():
-    """Check configuration status."""
-    # Token
-    token = load_token()
+def cmd_status(target_name=None):
+    """Check configuration status (multi-target aware: shows the default or --target target)."""
+    global ACTIVE_BASE_URL
+    root, config_path = find_project_root()
+    raw = load_raw_config() if config_path else None
+    name, cfg = None, None
+    if raw:
+        if "targets" in raw and target_name and target_name not in raw["targets"]:
+            print(f"Target '{target_name}' not found. Available: {', '.join(raw['targets'])}")
+            return
+        name, cfg = resolve_targets(raw, target_name)[0]
+        ACTIVE_BASE_URL = cfg["baseUrl"]
+
+    # Token: same lookup as the other commands
+    token = load_token(name) if raw else load_token_noconfig()
     if token:
         try:
             me = get_me(token)
@@ -1542,16 +1553,17 @@ def cmd_status():
             token = None
     else:
         print("Token: NOT FOUND")
-        print("  Run: taskana-cli auth <token>")
+        print(f"  Run: taskana-cli auth <token>{' --target ' + name if name and name != 'default' else ''}")
 
     # Project config
-    root, config_path = find_project_root()
-    if config_path:
-        with open(config_path) as f:
-            config = json.load(f)
+    if cfg:
         print(f"Config: {config_path}")
-        print(f"  projectId: {config.get('projectId', '-')}")
-        print(f"  workspaceId: {config.get('workspaceId', '-')}")
+        if name != "default":
+            others = [t for t in raw["targets"] if t != name]
+            print(f"  target: {name}" + (f" (also: {', '.join(others)})" if others else ""))
+        print(f"  server: {cfg['baseUrl']}")
+        print(f"  projectId: {cfg.get('projectId', '-')}")
+        print(f"  workspaceId: {cfg.get('workspaceId', '-')}")
     else:
         print("Config: NOT FOUND (.claude-team/taskana.json)")
         print("  Run: taskana-cli init")
@@ -2510,7 +2522,7 @@ def main():
 
     # status works with or without token
     if args[0] == "status":
-        cmd_status()
+        cmd_status(target_name)
         return
 
     # Local config commands — no token needed
